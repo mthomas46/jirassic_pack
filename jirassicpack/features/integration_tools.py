@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Tuple
 from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, safe_get, build_context, write_markdown_file, require_param, render_markdown_report
+from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log
 import re
 
 def prompt_integration_options(options: Dict[str, Any]) -> Dict[str, Any]:
@@ -71,18 +71,17 @@ def integration_tools(jira: Any, params: Dict[str, Any], user_email=None, batch_
         issues = retry_or_skip("Fetching issues for integration tools", do_search)
     except Exception as e:
         error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
+        contextual_log('error', f"[integration_tools] Failed to fetch issues: {e}", exc_info=True, extra=context)
         return
     if not issues:
         info("🦖 See, Nobody Cares. No issues found for integration links.", extra=context)
-        logger.info("🦖 See, Nobody Cares. No issues found for integration links.")
         return
     links = generate_integration_links(issues)
     if not links:
         info("🦖 See, Nobody Cares. No integration links found.", extra=context)
-        logger.info("🦖 See, Nobody Cares. No integration links found.")
         return
     filename = f"{output_dir}/integration_links{unique_suffix}.md"
     write_integration_links_file(filename, links, user_email, batch_index, unique_suffix, context)
     celebrate_success()
     info_spared_no_expense()
-    logger.info(f"🦖 [integration_tools] Feature complete | Suffix: {unique_suffix}") 
+    contextual_log('info', f"🦖 [integration_tools] Feature complete | Suffix: {unique_suffix}", extra=context) 

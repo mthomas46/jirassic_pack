@@ -4,7 +4,7 @@
 
 from typing import Any, Dict, List
 from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, safe_get, build_context, write_markdown_file, require_param, render_markdown_report
+from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log
 
 def prompt_automated_doc_options(options: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -92,14 +92,14 @@ def automated_documentation(jira: Any, params: dict, user_email=None, batch_inde
         issues = retry_or_skip("Fetching issues for documentation", do_search)
     except Exception as e:
         error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
+        contextual_log('error', f"[automated_documentation] Failed to fetch issues: {e}", exc_info=True, extra=context)
         return
     if not issues:
         info("🦖 See, Nobody Cares. No issues found for documentation.", extra=context)
-        logger.info("🦖 See, Nobody Cares. No issues found for documentation.")
         return
     filename = f"{output_dir}/automated_doc{unique_suffix}.md"
     write_automated_doc_file(filename, doc_type, issues, user_email, batch_index, unique_suffix, context)
     celebrate_success()
     info_spared_no_expense()
     info(f"📄 Automated documentation written to {filename}", extra=context)
-    logger.info(f"📄 Automated documentation feature complete | Suffix: {unique_suffix}") 
+    contextual_log('info', f"📄 Automated documentation feature complete | Suffix: {unique_suffix}", extra=context) 

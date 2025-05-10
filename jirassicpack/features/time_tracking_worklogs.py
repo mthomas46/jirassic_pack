@@ -3,7 +3,7 @@
 # It prompts for user, start/end dates, fetches issues with worklogs, and outputs a Markdown report with worklog details per issue.
 
 from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import prompt_with_validation, get_option, validate_required, validate_date, error, info, spinner, info_spared_no_expense, safe_get, build_context, write_markdown_file, require_param, render_markdown_report
+from jirassicpack.utils import prompt_with_validation, get_option, validate_required, validate_date, error, info, spinner, info_spared_no_expense, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -99,9 +99,9 @@ def time_tracking_worklogs(jira: Any, params: Dict[str, Any], user_email=None, b
     orig_get = getattr(jira, 'get', None)
     if orig_get:
         def log_get(*args, **kwargs):
-            logger.debug(f"Jira GET: args={args}, kwargs={redact_sensitive(kwargs)}")
+            contextual_log('debug', f"Jira GET: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context)
             resp = orig_get(*args, **kwargs)
-            logger.debug(f"Jira GET response: {resp}")
+            contextual_log('debug', f"Jira GET response: {resp}", extra=context)
             return resp
         jira.get = log_get
     jql = (
@@ -117,13 +117,13 @@ def time_tracking_worklogs(jira: Any, params: Dict[str, Any], user_email=None, b
         filtered_issues = retry_or_skip("Generating worklog summary from Jira issues", do_worklogs)
     except Exception as e:
         error(f"Failed to fetch worklogs: {e}. Please check your Jira connection, credentials, and network.", extra=context)
+        contextual_log('error', f"[time_tracking_worklogs] Failed to fetch worklogs: {e}", exc_info=True, extra=context)
         return
     if not filtered_issues:
         info("🦖 See, Nobody Cares. No worklogs found.", extra=context)
-        logger.info("🦖 See, Nobody Cares. No worklogs found.")
         return
     filename = f"{output_dir}/worklog_summary{unique_suffix}.md"
     write_worklog_summary_file(filename, user, start_date, end_date, filtered_issues, user_email, batch_index, unique_suffix, context)
     celebrate_success()
     info_spared_no_expense()
-    logger.info(f"⏳ Feature complete | Suffix: {unique_suffix}") 
+    contextual_log('info', f"⏳ [time_tracking_worklogs] Feature complete | Suffix: {unique_suffix}", extra=context) 

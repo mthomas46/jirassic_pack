@@ -3,7 +3,7 @@
 # It writes the updated field and value to a Markdown file for record-keeping.
 
 from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report
+from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
 from typing import Any, Dict
 import json
 
@@ -66,18 +66,18 @@ def write_update_issue_json(filename: str, issue_key: str, field: str, value: st
 def update_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
     context = build_context("update_issue", user_email, batch_index, unique_suffix)
     try:
-        logger.info(f"🦕 [update_issue] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}")
+        contextual_log('info', f"🦕 [update_issue] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", extra=context)
         issue_key = params.get('issue_key')
         if not issue_key:
-            error("issue_key is required.", extra={"feature": "update_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            error("issue_key is required.", extra=context)
             return
         field = params.get('field')
         if not field:
-            error("field is required.", extra={"feature": "update_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            error("field is required.", extra=context)
             return
         value = params.get('value')
         if not value:
-            error("value is required.", extra={"feature": "update_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            error("value is required.", extra=context)
             return
         output_dir = params.get('output_dir', 'output')
         unique_suffix = params.get('unique_suffix', '')
@@ -86,9 +86,9 @@ def update_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index
         orig_update_issue = getattr(jira, 'update_issue', None)
         if orig_update_issue:
             def log_update_issue(*args, **kwargs):
-                logger.debug(f"Jira update_issue: args={args}, kwargs={redact_sensitive(kwargs)}")
+                contextual_log('debug', f"Jira update_issue: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context)
                 resp = orig_update_issue(*args, **kwargs)
-                logger.debug(f"Jira update_issue response: {resp}")
+                contextual_log('debug', f"Jira update_issue response: {resp}", extra=context)
                 return resp
             jira.update_issue = log_update_issue
         def do_update():
@@ -99,8 +99,7 @@ def update_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index
                 )
         result = retry_or_skip("Updating Jira issue", do_update)
         if result is None:
-            info("🦖 See, Nobody Cares. No update was made.", extra={"feature": "update_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-            logger.info("🦖 See, Nobody Cares. No update was made.")
+            info("🦖 See, Nobody Cares. No update was made.", extra=context)
             return
         filename = f"{output_dir}/{issue_key}_updated_issue{unique_suffix}.md"
         write_update_issue_file(filename, issue_key, field, value, user_email, batch_index, unique_suffix, context=context, result=result)
@@ -108,13 +107,13 @@ def update_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index
         write_update_issue_json(json_filename, issue_key, field, value, result, user_email, batch_index, unique_suffix, context=context)
         celebrate_success()
         info_spared_no_expense()
-        info(f"🦕 Updated issue written to {filename}", extra={"feature": "update_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-        logger.info(f"🦕 [update_issue] Issue update complete | Suffix: {unique_suffix}")
+        info(f"🦕 Updated issue written to {filename}", extra=context)
+        contextual_log('info', f"🦕 [update_issue] Issue update complete | Suffix: {unique_suffix}", extra=context)
     except KeyboardInterrupt:
-        logger.warning("[update_issue] Graceful exit via KeyboardInterrupt.")
+        contextual_log('warning', "[update_issue] Graceful exit via KeyboardInterrupt.", extra=context)
         info("Graceful exit from Update Issue feature.", extra=context)
     except Exception as e:
-        logger.exception(f"🦕 [update_issue] Exception: {e}")
-        error(f"🦕 [update_issue] Exception: {e}", extra={"feature": "update_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+        contextual_log('error', f"🦕 [update_issue] Exception: {e}", exc_info=True, extra=context)
+        error(f"🦕 [update_issue] Exception: {e}", extra=context)
         raise
     return 

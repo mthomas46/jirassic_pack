@@ -3,7 +3,7 @@
 # It prompts for team members, start/end dates, and outputs a Markdown report with workload and bottleneck analysis.
 
 from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, validate_date, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report
+from jirassicpack.utils import get_option, validate_required, validate_date, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
 from datetime import datetime
 from typing import Any, Dict, List
 from colorama import Fore, Style
@@ -83,13 +83,13 @@ def write_analytics_file(filename: str, analytics: Dict[str, int], user_email=No
 def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
     context = build_context("user_team_analytics", user_email, batch_index, unique_suffix)
     try:
-        logger.info(f"🧬 User/team analytics entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", extra=context)
+        contextual_log('info', f"🧬 User/team analytics entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", extra=context)
         orig_search_issues = getattr(jira, 'search_issues', None)
         if orig_search_issues:
             def log_search_issues(*args, **kwargs):
-                logger.debug(f"Jira search_issues: args={args}, kwargs={redact_sensitive(kwargs)}")
+                contextual_log('debug', f"Jira search_issues: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context)
                 resp = orig_search_issues(*args, **kwargs)
-                logger.debug(f"Jira search_issues response: {resp}")
+                contextual_log('debug', f"Jira search_issues response: {resp}", extra=context)
                 return resp
             jira.search_issues = log_search_issues
         team = params.get('team')
@@ -282,7 +282,7 @@ def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batc
                 team_stats["reporters"][r] = team_stats["reporters"].get(r, 0) + c
         if not any(len(data["issues"]) for data in all_user_data.values()):
             info("🦖 See, Nobody Cares. No analytics data found.", extra=context)
-            logger.info("🦖 See, Nobody Cares. No analytics data found.", extra=context)
+            contextual_log('info', "🦖 See, Nobody Cares. No analytics data found.", extra=context)
             return
         # Write expanded analytics to Markdown
         filename = f"{output_dir}/user_team_analytics{unique_suffix}.md"
@@ -364,10 +364,10 @@ def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batc
             with open(filename, 'w') as f:
                 f.write(content)
             info(f"🧬 User/team analytics written to {filename}", extra=context)
-            logger.info(f"🧬 User/team analytics complete! | Suffix: {unique_suffix}", extra=context)
+            contextual_log('info', f"🧬 [user_team_analytics] Feature complete | Suffix: {unique_suffix}", extra=context)
         except Exception as e:
             error(f"Failed to write analytics file: {e}", extra=context)
-            logger.error(f"[user_team_analytics] Failed to write analytics file: {e}", exc_info=True, extra=context)
+            contextual_log('error', f"[user_team_analytics] Failed to write analytics file: {e}", exc_info=True, extra=context)
         celebrate_success()
         info_spared_no_expense()
         info(f"🧬 User/team analytics written to {filename}", extra=context)

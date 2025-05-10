@@ -4,7 +4,7 @@
 # Results are written to a Markdown report for traceability.
 
 from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, print_batch_summary, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, error, info, spinner, progress_bar, BULK_ACTIONS, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report
+from jirassicpack.utils import get_option, validate_required, error, info, spinner, progress_bar, BULK_ACTIONS, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
 from typing import Any, Dict, List, Tuple
 import questionary
 import json
@@ -70,31 +70,31 @@ def write_bulk_report_json(filename: str, action: str, summary: list, user_email
 def bulk_operations(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
     context = build_context("bulk_operations", user_email, batch_index, unique_suffix)
     try:
-        logger.info(f"🦴 [bulk_operations] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}")
+        contextual_log('info', f"🦴 [bulk_operations] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", extra=context)
         # Patch JiraClient for logging
         orig_create_issue = getattr(jira, 'create_issue', None)
         orig_update_issue = getattr(jira, 'update_issue', None)
         if orig_create_issue:
             def log_create_issue(*args, **kwargs):
-                logger.debug(f"Jira create_issue: args={args}, kwargs={redact_sensitive(kwargs)}")
+                contextual_log('debug', f"Jira create_issue: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context)
                 resp = orig_create_issue(*args, **kwargs)
-                logger.debug(f"Jira create_issue response: {resp}")
+                contextual_log('debug', f"Jira create_issue response: {resp}", extra=context)
                 return resp
             jira.create_issue = log_create_issue
         if orig_update_issue:
             def log_update_issue(*args, **kwargs):
-                logger.debug(f"Jira update_issue: args={args}, kwargs={redact_sensitive(kwargs)}")
+                contextual_log('debug', f"Jira update_issue: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context)
                 resp = orig_update_issue(*args, **kwargs)
-                logger.debug(f"Jira update_issue response: {resp}")
+                contextual_log('debug', f"Jira update_issue response: {resp}", extra=context)
                 return resp
             jira.update_issue = log_update_issue
         action = params.get('action')
         if not action:
-            error("action is required.", extra={"feature": "bulk_operations", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            error("action is required.", extra=context)
             return
         jql = params.get('jql')
         if not jql:
-            error("jql is required.", extra={"feature": "bulk_operations", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            error("jql is required.", extra=context)
             return
         value = params.get('value', '')
         output_dir = params.get('output_dir', 'output')
@@ -105,15 +105,14 @@ def bulk_operations(jira: Any, params: Dict[str, Any], user_email=None, batch_in
             "Are you sure you want to proceed? This could affect many issues.\n🦖 God help us, we're in the hands of devs."
         ).ask()
         if not confirm:
-            info("🦖 Bulk operation cancelled by user.", extra={"feature": "bulk_operations", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            info("🦖 Bulk operation cancelled by user.", extra=context)
             return
         def do_search():
             with spinner("🦴 Running Bulk Operations..."):
                 return jira.search_issues(jql, fields=["key"], max_results=100)
         issues = retry_or_skip("Fetching issues for bulk operation", do_search)
         if not issues:
-            info("🦖 See, Nobody Cares. No issues matched your criteria.", extra={"feature": "bulk_operations", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-            logger.info("🦖 See, Nobody Cares. No issues matched the bulk operation JQL.")
+            info("🦖 See, Nobody Cares. No issues matched your criteria.", extra=context)
             return
         results = []
         summary = []
@@ -149,19 +148,17 @@ def bulk_operations(jira: Any, params: Dict[str, Any], user_email=None, batch_in
         write_bulk_report_json(json_filename, action, summary, user_email, batch_index, unique_suffix, context=context)
         celebrate_success()
         info_spared_no_expense()
-        # Enhanced summary: show error messages for failed items
         info("\nBatch Summary:", extra=context)
         info("Feature         | Status   | Error Message", extra=context)
         info("----------------|----------|--------------", extra=context)
         for key, status, err in summary:
-            color = '\033[92m' if status == "Success" else '\033[91m'
             info(f"{key:<15} | {status:<8} | {err}", extra=context)
-        info(f"🦴 Bulk operation report written to {filename}", extra={"feature": "bulk_operations", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-        logger.info(f"🦴 [bulk_operations] Bulk operation complete | Suffix: {unique_suffix}")
+        info(f"🦴 Bulk operation report written to {filename}", extra=context)
+        contextual_log('info', f"🦴 [bulk_operations] Bulk operation complete | Suffix: {unique_suffix}", extra=context)
     except KeyboardInterrupt:
-        logger.warning("[bulk_operations] Graceful exit via KeyboardInterrupt.")
+        contextual_log('warning', "[bulk_operations] Graceful exit via KeyboardInterrupt.", extra=context)
         info("Graceful exit from Bulk Operations feature.", extra=context)
     except Exception as e:
-        logger.exception(f"🦴 [bulk_operations] Exception: {e}")
-        error(f"🦴 [bulk_operations] Exception: {e}", extra={"feature": "bulk_operations", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+        contextual_log('error', f"🦴 [bulk_operations] Exception: {e}", exc_info=True, extra=context)
+        error(f"🦴 [bulk_operations] Exception: {e}", extra=context)
         raise 

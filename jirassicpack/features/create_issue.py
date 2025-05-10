@@ -3,7 +3,7 @@
 # It writes the created issue's key and summary to a Markdown file for record-keeping.
 
 from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report
+from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
 from typing import Any, Dict
 import logging
 import json
@@ -63,23 +63,23 @@ def write_create_issue_json(filename: str, issue: dict, user_email=None, batch_i
 def create_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
     context = build_context("create_issue", user_email, batch_index, unique_suffix)
     try:
-        logger.info(f"🦖 [create_issue] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}")
+        contextual_log('info', f"🦖 [create_issue] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", extra=context)
         # Patch JiraClient for logging
         orig_create_issue = getattr(jira, 'create_issue', None)
         if orig_create_issue:
             def log_create_issue(*args, **kwargs):
-                logger.debug(f"Jira create_issue: args={args}, kwargs={redact_sensitive(kwargs)}")
+                contextual_log('debug', f"Jira create_issue: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context)
                 resp = orig_create_issue(*args, **kwargs)
-                logger.debug(f"Jira create_issue response: {resp}")
+                contextual_log('debug', f"Jira create_issue response: {resp}", extra=context)
                 return resp
             jira.create_issue = log_create_issue
         project = params.get('project')
         if not project:
-            error("project is required.", extra={"feature": "create_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            error("project is required.", extra=context)
             return
         summary = params.get('summary')
         if not summary:
-            error("summary is required.", extra={"feature": "create_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            error("summary is required.", extra=context)
             return
         output_dir = params.get('output_dir', 'output')
         unique_suffix = params.get('unique_suffix', '')
@@ -94,8 +94,7 @@ def create_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index
                 )
         issue = retry_or_skip("Creating Jira issue", do_create)
         if not issue:
-            info("🦖 See, Nobody Cares. No issue was created.", extra={"feature": "create_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-            logger.info("🦖 See, Nobody Cares. No issue was created.")
+            info("🦖 See, Nobody Cares. No issue was created.", extra=context)
             return
         filename = f"{output_dir}/{params['project']}_created_issue{unique_suffix}.md"
         write_create_issue_file(filename, issue.get('key', 'N/A'), params['summary'], user_email, batch_index, unique_suffix, context=context, issue=issue)
@@ -103,12 +102,12 @@ def create_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index
         write_create_issue_json(json_filename, issue, user_email, batch_index, unique_suffix, context=context)
         celebrate_success()
         info_spared_no_expense()
-        info(f"🦖 Created issue written to {filename}", extra={"feature": "create_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-        logger.info(f"🦖 [create_issue] Issue creation complete | Suffix: {unique_suffix}")
+        info(f"🦖 Created issue written to {filename}", extra=context)
+        contextual_log('info', f"🦖 [create_issue] Issue creation complete | Suffix: {unique_suffix}", extra=context)
     except KeyboardInterrupt:
-        logger.warning("[create_issue] Graceful exit via KeyboardInterrupt.")
+        contextual_log('warning', "[create_issue] Graceful exit via KeyboardInterrupt.", extra=context)
         info("Graceful exit from Create Issue feature.", extra=context)
     except Exception as e:
-        logger.exception(f"🦖 [create_issue] Exception: {e}")
-        error(f"🦖 [create_issue] Exception: {e}", extra={"feature": "create_issue", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+        contextual_log('error', f"🦖 [create_issue] Exception: {e}", exc_info=True, extra=context)
+        error(f"🦖 [create_issue] Exception: {e}", extra=context)
         raise 
