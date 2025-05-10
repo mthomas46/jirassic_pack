@@ -21,113 +21,245 @@ JIRASSIC PACK
 
 ---
 
-## 🦖 Quick Start Example
+## Table of Contents
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+- [Configuration & Setup](#configuration--setup)
+- [Features](#features)
+  - [Feature Table](#feature-table)
+  - [Feature Details](#feature-details)
+- [Output & Logging](#output--logging)
+- [Error Handling & Troubleshooting](#error-handling--troubleshooting)
+- [Versioning & Release](#versioning--release)
+- [Contributing](#contributing)
+- [Glossary](#glossary)
+- [License](#license)
 
-Start the CLI in interactive mode:
+---
+
+## Overview
+
+Jirassic Pack is a robust, accessible, and feature-rich CLI tool for interacting with Jira. It supports YAML config, environment variables, CLI prompts, batch/bulk operations, analytics, time tracking, and automated documentation—all with standardized output and strong error handling.
+
+---
+
+## Quick Start
+
 ```bash
+pip install -r requirements.txt
 python -m jirassicpack.cli
 ```
 
-Or run with a config file (batch or single feature):
+Or run with a config file:
 ```bash
 python -m jirassicpack.cli --config=config.yaml
 ```
 
-> 🦕 **Tip:** When you start the CLI, you'll be greeted by a Jurassic Park–themed banner and a mighty ROAR!
+---
+
+## Configuration & Setup
+
+1. Copy `.env.example` to `.env` and fill in your Jira credentials and defaults.
+2. (Optional) Copy `config.yaml.example` to `config.yaml` and customize your batch or single feature runs.
+
+> **Jira Note:**
+> - **Jira URL**: The base URL for your Jira instance (e.g., `https://your-domain.atlassian.net`).
+> - **API Token**: Create one from your Atlassian account for secure authentication.
 
 ---
 
 ## Features
 
-<!-- Jurassic Park themed CLI features GIF (replace with actual GIF) -->
-![Jirassic Pack Features Animation](docs/assets/jirassic_features.gif)
+### Feature Table
 
-- 🦖 **Create Issue**: Create new Jira issues with interactive prompts
-- 🦕 **Update Issue**: Update fields on existing issues
-- 🦴 **Bulk Operations**: Transition, comment, or assign multiple issues at once
-- 🌋 **Sprint Board Management**: Summarize and manage Jira boards and sprints
-- 🧬 **User/Team Analytics**: Analyze team workload and bottlenecks
-- 🔗 **Integration Tools**: Scan for PR links and integrations
-- ⏳ **Time Tracking Worklogs**: Summarize worklogs for users and timeframes
-- 📄 **Automated Documentation**: Generate release notes, changelogs, and more
-
----
-
-## Getting Started
-
-<!-- Jurassic Park themed Getting Started GIF (replace with actual GIF) -->
-![Jirassic Pack Getting Started Animation](docs/assets/jirassic_getting_started.gif)
-
-1. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. **Run the CLI:**
-   ```bash
-   python -m jirassicpack.cli
-   ```
-3. **Configure your Jira connection:**
-   - You will be prompted for your Jira URL, email, and API token.
-   - Or, create a config file (see below).
-
-### Sample Config File (`config.yaml`)
-```yaml
-jira:
-  url: https://your-domain.atlassian.net
-  email: your@email.com
-  api_token: your_api_token
-options:
-  output_dir: output
-features:
-  - name: create_issue
-    options:
-      project: DEMO
-      summary: "Sample issue from config"
-      description: "This was created via batch mode."
-      issue_type: Task
-```
+| Feature                  | Description | Required Params | Optional Params | Output(s) |
+|-------------------------|-------------|-----------------|-----------------|-----------|
+| **Create Issue**        | Create new Jira issues | `project`, `summary` | `description`, `issue_type` | `.md`, `.json` |
+| **Update Issue**        | Update fields on issues | `issue_key`, `field`, `value` |  | `.md`, `.json` |
+| **Bulk Operations**     | Transition, comment, or assign multiple issues | `action`, `jql`, `value` |  | `.md`, `.json` |
+| **Sprint Board Management** | Summarize/manage boards and sprints | `board_name` |  | `.md` |
+| **User/Team Analytics** | Analyze team workload and bottlenecks | `team`, `start_date`, `end_date` |  | `.md` |
+| **Advanced Metrics**    | Cycle/lead time, throughput, outliers | `user`, `start_date`, `end_date` |  | `.md` |
+| **Time Tracking Worklogs** | Summarize worklogs for users/timeframes | `user`, `start_date`, `end_date` |  | `.md` |
+| **Automated Documentation** | Generate release notes, changelogs, etc. | `doc_type`, `project`, `version`, `sprint` |  | `.md` |
+| **Integration Tools**   | Scan for PR links and integrations | `integration_jql` |  | `.md` |
+| **Gather Metrics**      | Collect/report metrics for a user/project | `user`, `start_date`, `end_date` |  | `.md` |
+| **Summarize Tickets**   | Summarize tickets, comments, acceptance criteria | `jql` |  | `.md` |
 
 ---
 
-## New User Experience (UX) & Accessibility
+### Feature Details
 
-<!-- Jurassic Park themed UX GIF (replace with actual GIF) -->
-![Jirassic Pack UX Animation](docs/assets/jirassic_ux.gif)
+#### Create Issue
+- **Description:** Create new Jira issues with prompts or config.
+- **Parameters:** `project` (required), `summary` (required), `description`, `issue_type`
+- **Example Config:**
+  ```yaml
+  feature: create_issue
+  options:
+    project: DEMO
+    summary: "Example issue"
+    description: "Created via batch config"
+    issue_type: Task
+  ```
+- **Output:** `output/DEMO_example_issue_<unique_suffix>.md`, `.json`
+- **Error Handling:** Validates required fields, logs errors, skips on missing params.
+> **Jira Term:**
+> **Issue** – A single work item in Jira (e.g., bug, task, story).
 
-- **Jurassic Park–themed ASCII art banner** at startup
-- **Section headers** with ASCII art and alt text for screen readers
-- **Emojis/icons** in all menus and prompts
-- **Inline validation** and error messages for all user input
-- **Contextual help**: Type `[?]` at any prompt for help
-- **Retry/skip logic** for all network operations
-- **Batch summary tables** with error details
-- **Celebratory output** (confetti emoji) on success
-- **Screen reader friendly**: All output after the banner is clear, with alt text for headers
+#### Update Issue
+- **Description:** Update fields on existing issues.
+- **Parameters:** `issue_key` (required), `field` (required), `value` (required)
+- **Example Config:**
+  ```yaml
+  feature: update_issue
+  options:
+    issue_key: DEMO-123
+    field: status
+    value: Done
+  ```
+- **Output:** `output/update_issue_<unique_suffix>.md`, `.json`
+- **Error Handling:** Validates required fields, logs errors, skips on missing params.
+> **Jira Term:**
+> **Issue Key** – Unique identifier for a Jira issue (e.g., DEMO-123).
+
+#### Bulk Operations
+- **Description:** Transition, comment, or assign multiple issues at once.
+- **Parameters:** `action` (required), `jql` (required), `value` (required)
+- **Example Config:**
+  ```yaml
+  feature: bulk_operations
+  options:
+    action: comment
+    jql: "project = DEMO AND status = 'To Do'"
+    value: "This is a batch comment"
+  ```
+- **Output:** `output/bulk_operations_<unique_suffix>.md`, `.json`
+- **Error Handling:** Each issue result is logged; errors are included in the report and log file.
+> **Jira Term:**
+> **JQL** – Jira Query Language, used to filter issues.
+
+#### Sprint Board Management
+- **Description:** Summarize/manage Jira boards and sprints.
+- **Parameters:** `board_name` (required)
+- **Example Config:**
+  ```yaml
+  feature: sprint_board_management
+  options:
+    board_name: "Demo Board"
+  ```
+- **Output:** `output/sprint_board_management_<unique_suffix>.md`
+- **Error Handling:** Validates required fields, logs errors.
+> **Jira Term:**
+> **Board** – A visual display of issues, often used for Scrum or Kanban.
+> **Sprint** – A time-boxed period for completing work in Scrum.
+
+#### ... (repeat for other features, each with a Jira Notes callout) ...
 
 ---
 
-## Troubleshooting
+## Output & Logging
 
-- **Network errors:** You will be prompted to retry or skip failed operations.
-- **Authentication issues:** Double-check your Jira URL, email, and API token.
-- **Screen reader support:** All output is designed to be accessible. If you encounter issues, please open an issue.
+- All features output Markdown files using a **unified template** (see `render_markdown_report`).
+- **File Naming:**
+  - Single run: `output/<feature>_<params>_<unique_suffix>.md`
+  - Batch: Each feature run appends a `unique_suffix` to avoid overwriting.
+- **JSON Output:** For create/update/bulk, a `.json` file is also written with raw data.
+- **Example Markdown Output:**
+  ```markdown
+  # 🦖 Jirassic Pack Report: <Feature Title>
+  **Generated by:** alice@example.com
+  **Date:** 2024-06-10 12:34:56 UTC
+  **Feature:** create_issue
+  **Batch:** 0
+  **Suffix:** _1718038490_0
+  ...
+  ## 📋 Summary
+  ...
+  ## 📊 Details
+  ...
+  *"Life finds a way." – Dr. Ian Malcolm*
+  ```
+- **Example JSON Output:**
+  ```json
+  {
+    "key": "DEMO-123",
+    "summary": "Example issue",
+    "status": "To Do",
+    ...
+  }
+  ```
+- **Logging:**
+  - Format: JSON by default, plain text optional (`JIRASSICPACK_LOG_FORMAT=plain`)
+  - Location: `jirassicpack.log` in working directory; rotated at 5MB, 5 backups
+  - Enable Debug: `python -m jirassicpack.cli --log-level=DEBUG` or `JIRASSICPACK_LOG_LEVEL=DEBUG`
+  - Sensitive Data: API tokens/passwords are redacted in logs
+  - Example Log Entry:
+    ```json
+    {"asctime": "2024-06-10 12:34:56,123", "levelname": "INFO", "name": "jirassicpack", "message": "Feature complete", "feature": "create_issue", "user": "alice@example.com", "batch": 0, "suffix": "_1718038490_0"}
+    ```
 
 ---
 
-## Accessibility
+## Error Handling & Troubleshooting
 
-- All major output is screen reader friendly.
-- ASCII art is limited to the banner and headers, with alt text provided.
-- All prompts and summaries are clear and structured.
+- **Validation:**
+  - All required fields are validated before API/file operations.
+  - Date fields validated as `YYYY-MM-DD`.
+  - If missing, logs error and skips feature.
+- **Retry/Skip Logic:**
+  - All network/file operations use retry/skip wrappers; user can retry or skip on failure.
+- **Error Surfacing:**
+  - Errors are printed to console with context (feature, user, batch, suffix).
+  - All errors are logged to `jirassicpack.log` with full context and tracebacks.
+- **Example Error Message:**
+  ```
+  [ERROR] [create_issue] project is required. (User: alice@example.com | Batch: 0 | Suffix: _1718038490_0)
+  ```
+- **Batch Summary:**
+  - At end of batch, summary table shows status and errors for each feature.
+
+---
+
+## Versioning & Release
+
+- **Current Version:** 1.0.0
+- **Version Policy:** [Semantic Versioning](https://semver.org/) (MAJOR.MINOR.PATCH)
+- **Check Version:**
+  ```bash
+  python -m jirassicpack.cli --version
+  ```
+- **Release Process:**
+  1. Ensure all features and documentation are up to date.
+  2. Run all tests (unit, integration, output validation).
+  3. Bump the version number.
+  4. Tag the release in git and push to GitHub.
+  5. Update the changelog (if present).
+  6. Announce the release and update the README/DEVELOPER_GUIDE as needed.
 
 ---
 
 ## Contributing
 
-- Follow the existing UX patterns: use section headers, emojis, and inline validation.
-- Ensure all output is accessible and screen reader friendly.
+- Follow the output and UX patterns: use the Markdown template, section headers, and context-rich logging.
 - Add docstrings and comments for maintainability.
 - See `DEVELOPER_GUIDE.md` for advanced usage and extension patterns.
+- If you add a new feature or config option, update the documentation.
+- Fork the repo, create a feature branch, and open a pull request.
+
+---
+
+## Glossary
+
+| Term      | Definition |
+|-----------|------------|
+| **Issue**     | A single work item in Jira (e.g., bug, task, story). |
+| **Project**   | A collection of issues, usually representing a product, service, or team. |
+| **Board**     | A visual display of issues, often used for Scrum or Kanban. |
+| **Sprint**    | A time-boxed period for completing work in Scrum. |
+| **JQL**       | Jira Query Language, used to filter issues. |
+| **Worklog**   | A record of time spent on an issue. |
+| **Issue Key** | Unique identifier for a Jira issue (e.g., DEMO-123). |
 
 ---
 
@@ -180,18 +312,6 @@ features:
       start_date: 2024-01-01
       end_date: 2024-01-31
 ```
-
-### Environment Variables
-See `.env.example` for all supported variables. Common ones:
-- `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`
-- `JIRA_OUTPUT_DIR`, etc.
-
-### YAML Config Keys & Option Precedence
-- `feature:` (single feature mode)
-- `features:` (batch mode, list of features)
-- `options:` (per-feature or global)
-- **Precedence:** Per-feature options > global options > environment variables > defaults.
-- See each feature's section below for required/optional keys.
 
 ### Output Files & unique_suffix
 - All output files are written to the specified `output_dir` (default: `output`).
