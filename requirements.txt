@@ -1,4 +1,5 @@
 requests
 PyYAML
 questionary
-python-dotenv 
+python-dotenv
+tabulate 
