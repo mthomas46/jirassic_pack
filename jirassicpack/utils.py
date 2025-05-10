@@ -7,6 +7,8 @@ from yaspin import yaspin
 from tqdm import tqdm
 import sys
 import logging
+import uuid
+import inspect
 
 colorama_init(autoreset=True)
 
@@ -42,19 +44,47 @@ def progress_bar(iterable, desc: str = "Processing"):
     return tqdm(items, desc=desc, ncols=80, colour="green")
 
 # Enhanced error/info output
-def info(msg, extra=None):
+def contextual_log(level, msg, extra=None, exc_info=None, params=None, result=None):
+    """
+    Log with enriched context: feature, user, batch, suffix, function, operation_id, params, result, and exception info.
+    """
+    from jirassicpack.cli import logger  # Avoid circular import
+    frame = inspect.currentframe().f_back
+    func_name = frame.f_code.co_name
+    operation_id = str(uuid.uuid4())
+    context = extra.copy() if extra else {}
+    context.update({
+        'function': func_name,
+        'operation_id': operation_id,
+    })
+    if params is not None:
+        context['params'] = params
+    if result is not None:
+        context['result'] = result
+    if level == 'info':
+        logger.info(msg, extra=context)
+    elif level == 'error':
+        logger.error(msg, extra=context, exc_info=exc_info)
+    elif level == 'warning':
+        logger.warning(msg, extra=context)
+    elif level == 'debug':
+        logger.debug(msg, extra=context)
+    else:
+        logger.log(level, msg, extra=context)
+
+def info(msg, extra=None, params=None, result=None):
     context_str = ""
     if extra:
         context_str = f" [feature={extra.get('feature')}, user={extra.get('user')}, batch={extra.get('batch')}, suffix={extra.get('suffix')}]"
     print(Fore.GREEN + str(msg) + context_str + Style.RESET_ALL)
-    logger.info(msg, extra=extra or {})
+    contextual_log('info', msg, extra=extra, params=params, result=result)
 
-def error(msg, extra=None):
+def error(msg, extra=None, exc_info=True, params=None, result=None):
     context_str = ""
     if extra:
         context_str = f" [feature={extra.get('feature')}, user={extra.get('user')}, batch={extra.get('batch')}, suffix={extra.get('suffix')}]"
     print(Fore.RED + str(msg) + context_str + Style.RESET_ALL)
-    logger.error(msg, extra=extra or {})
+    contextual_log('error', msg, extra=extra, exc_info=exc_info, params=params, result=result)
 
 # Enhanced validation with re-prompting in interactive mode
 def validate_required(value: Any, name: str, prompt: Optional[str] = None) -> Any:

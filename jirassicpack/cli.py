@@ -7,7 +7,7 @@ from jirassicpack.config import ConfigLoader
 from jirassicpack.jira_client import JiraClient
 import questionary
 from typing import Any, Dict
-from jirassicpack.utils import error, info, spinner, progress_bar
+from jirassicpack.utils import error, info, spinner, progress_bar, contextual_log
 from colorama import Fore, Style
 import pyfiglet
 from pythonjsonlogger import jsonlogger
@@ -64,7 +64,6 @@ JIRASSIC_ASCII = r'''
 ||<__.|_|-|_|       <__.|_|-|_|     ||<__.|_|-|_|       <__.|_|-|_|     ||
 ||      |  |   ________   |  |      ||      |  |   ________   |  |      ||
 ||      |  |  |  __  __|  |  |      ||      |  |  |  __  __|  |  |      ||
-||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
 ||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
 ||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
 ||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
@@ -219,7 +218,7 @@ def main() -> None:
         print(WARNING_YELLOW + BANNER_ALT_TEXT + RESET)
         print(DANGER_RED + "\nROOOAAARRR! 🦖\n" + RESET)
         print(f"[Banner: {BANNER_ALT_TEXT}]")
-        logger.info("🦖 Jirassic Pack CLI started.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+        contextual_log('info', "🦖 Jirassic Pack CLI started.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
         config_path = None
         log_level = LOG_LEVEL
         if len(sys.argv) > 1:
@@ -240,7 +239,7 @@ def main() -> None:
                 return '***'
             return token[:3] + '*' * (len(token)-6) + token[-3:]
         print(WARNING_YELLOW + f"Loaded Jira config: URL={jira_conf['url']}, Email={jira_conf['email']}, Token={redact_token(jira_conf['api_token'])}" + RESET)
-        logger.info(f"🦖 Loaded config: {config_path or 'default'} | Jira config: {redact_sensitive(jira_conf)} | Options: {redact_sensitive(options)}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+        contextual_log('info', f"🦖 Loaded config: {config_path or 'default'} | Jira config: {redact_sensitive(jira_conf)} | Options: {redact_sensitive(options)}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
         # Prompt for Jira credentials (shared by all features)
         if not jira_conf['url']:
             jira_conf['url'] = questionary.text("Jira URL:", default=os.environ.get('JIRA_URL', 'https://your-domain.atlassian.net')).ask()
@@ -249,13 +248,13 @@ def main() -> None:
         if not jira_conf['api_token']:
             jira_conf['api_token'] = questionary.password("Jira API Token:").ask()  # No default for security
         with spinner("Connecting to Jira..."):
-            logger.info(f"🦖 Connecting to Jira at {jira_conf['url']} as {jira_conf['email']}", extra={"feature": "cli", "user": jira_conf['email'], "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 Connecting to Jira at {jira_conf['url']} as {jira_conf['email']}", extra={"feature": "cli", "user": jira_conf['email'], "batch": None, "suffix": None})
             jira = JiraClient(jira_conf['url'], jira_conf['email'], jira_conf['api_token'])
         register_features()
         # Batch mode: run each feature with merged options
         if features:
             global_options = config.get_options()
-            info(f"🦖 Batch mode: {len(features)} features queued.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 Batch mode: {len(features)} features queued.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
             for i, feat in enumerate(progress_bar(features, desc="Batch Processing")):
                 name = feat.get('name')
                 feat_options = feat.get('options', {})
@@ -263,17 +262,16 @@ def main() -> None:
                 unique_suffix = f"_{int(time.time())}_{i}"
                 merged_options['unique_suffix'] = unique_suffix
                 print(f"\n{WARNING_YELLOW}--- Running feature {i+1}/{len(features)}: {name} ---{RESET}")
-                logger.info(f"🦖 Running feature: {name} | Options: {redact_sensitive(merged_options)} | Batch index: {i} | Suffix: {unique_suffix}", extra={"feature": name, "user": None, "batch": i, "suffix": unique_suffix})
+                contextual_log('info', f"🦖 Running feature: {name} | Options: {redact_sensitive(merged_options)} | Batch index: {i} | Suffix: {unique_suffix}", extra={"feature": name, "user": None, "batch": i, "suffix": unique_suffix})
                 run_feature(name, jira, merged_options, user_email=jira_conf.get('email'), batch_index=i, unique_suffix=unique_suffix)
-            info("🦖 Batch run complete!", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
-            logger.info("🦖 Batch run complete.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
-            logger.info("🦖 Welcome to Jurassic Park.", extra={"feature": "cli", "user": jira_conf.get('email'), "batch": None, "suffix": None})
+            contextual_log('info', "🦖 Batch run complete!", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+            contextual_log('info', "🦖 Welcome to Jurassic Park.", extra={"feature": "cli", "user": jira_conf.get('email'), "batch": None, "suffix": None})
             info("🦖 Welcome to Jurassic Park.")
             return
         # Single feature mode
         if feature:
-            info(f"🦖 Running feature: {feature}", extra={"feature": feature, "user": jira_conf.get('email'), "batch": None, "suffix": None})
-            logger.info(f"🦖 Running feature: {feature} | Options: {redact_sensitive(options)} | User: {jira_conf.get('email')}", extra={"feature": feature, "user": jira_conf.get('email'), "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 Running feature: {feature}", extra={"feature": feature, "user": jira_conf.get('email'), "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 Running feature: {feature} | Options: {redact_sensitive(options)} | User: {jira_conf.get('email')}", extra={"feature": feature, "user": jira_conf.get('email'), "batch": None, "suffix": None})
             run_feature(feature, jira, options, user_email=jira_conf.get('email'))
             return
         # Interactive mode: persistent main menu loop
@@ -282,16 +280,16 @@ def main() -> None:
             action = feature_menu()
             if action == "exit":
                 print(f"{JUNGLE_GREEN}Goodbye!{RESET}")
-                logger.info("🦖 User exited from main menu.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+                contextual_log('info', "🦖 User exited from main menu.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
                 sys.exit(0)
-            logger.info(f"🦖 Running feature: {action} | Options: {redact_sensitive(options)} | User: {jira_conf.get('email')}", extra={"feature": action, "user": jira_conf.get('email'), "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 Running feature: {action} | Options: {redact_sensitive(options)} | User: {jira_conf.get('email')}", extra={"feature": action, "user": jira_conf.get('email'), "batch": None, "suffix": None})
             run_feature(action, jira, options, user_email=jira_conf.get('email'))
     except KeyboardInterrupt:
         print(f"\n{DANGER_RED}🦖 Graceful exit: Goodbye from Jirassic Pack!{RESET}")
-        logger.warning("🦖 Graceful exit via KeyboardInterrupt.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+        contextual_log('warning', "🦖 Graceful exit via KeyboardInterrupt.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
         sys.exit(0)
     except Exception as e:
-        logger.exception(f"🦖 Unhandled exception in main: {e}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+        contextual_log('exception', f"🦖 Unhandled exception in main: {e}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
         error(f"🦖 Unhandled exception in main: {e}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
         raise
 
@@ -321,12 +319,12 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
     key = menu_to_key.get(feature, feature)
     context = f"User: {user_email} | Batch: {batch_index} | Suffix: {unique_suffix}" if user_email or batch_index or unique_suffix else ""
     feature_tag = f"[{key}]"
-    logger.info(f"[DEBUG] run_feature: key={repr(key)}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+    contextual_log('info', f"[DEBUG] run_feature: key={repr(key)}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
     if key == "test_connection":
         test_connection(jira, options, context)
         return
     if key == "output_all_users":
-        logger.info(f"{feature_tag} Outputting all users. Options: {redact_sensitive(options)} {context}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+        contextual_log('info', f"{feature_tag} Outputting all users. Options: {redact_sensitive(options)} {context}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
         output_all_users(jira, options, options.get('unique_suffix', ''))
         return
     # Inline handlers for user features
@@ -340,17 +338,17 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             pretty_print_result(result)
         except Exception as e:
             error(f"🦖 Error fetching user: {e}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-            logger.error(f"[get_user] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            contextual_log('error', f"[get_user] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
         return
     if key == "search_users":
         try:
             query = questionary.text("Search query (name/email):").ask()
-            logger.info(f"[search_users] Query param: {query}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            contextual_log('info', f"[search_users] Query param: {query}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
             result = jira.search_users(query=query)
             pretty_print_result(result)
         except Exception as e:
             error(f"🦖 Error searching users: {e}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-            logger.error(f"[search_users] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            contextual_log('error', f"[search_users] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
         return
     if key == "search_users_by_displayname_email":
         try:
@@ -361,12 +359,12 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
                 params['query'] = displayname
             if email:
                 params['username'] = email
-            logger.info(f"[search_users_by_displayname_email] Params: {params}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            contextual_log('info', f"[search_users_by_displayname_email] Params: {params}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
             result = jira.get('users/search', params=params)
             pretty_print_result(result)
         except Exception as e:
             error(f"🦖 Error searching users: {e}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-            logger.error(f"[search_users_by_displayname_email] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            contextual_log('error', f"[search_users_by_displayname_email] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
         return
     if key == "get_user_property":
         try:
@@ -376,7 +374,7 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             pretty_print_result(result)
         except Exception as e:
             error(f"🦖 Error fetching user property: {e}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-            logger.error(f"[get_user_property] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            contextual_log('error', f"[get_user_property] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
         return
     if key == "get_task":
         try:
@@ -385,7 +383,7 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             pretty_print_result(result)
         except Exception as e:
             error(f"🦖 Error fetching task: {e}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-            logger.error(f"[get_task] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            contextual_log('error', f"[get_task] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
         return
     if key == "get_mypreferences":
         try:
@@ -397,10 +395,10 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             if ("400" in msg or "404" in msg or "Bad Request" in msg or "not found" in msg.lower()):
                 error_msg = f"🦖 The 'mypreferences' endpoint is not supported on your Jira instance. (Jira Cloud does not support this endpoint.)"
                 print(DANGER_RED + error_msg + RESET)
-                logger.error(f"[get_mypreferences] {error_msg} Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+                contextual_log('error', f"[get_mypreferences] {error_msg} Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
             else:
                 error(f"🦖 Error fetching mypreferences: {e}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-                logger.error(f"[get_mypreferences] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+                contextual_log('error', f"[get_mypreferences] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
         return
     if key == "get_current_user":
         try:
@@ -408,14 +406,14 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             pretty_print_result(result)
         except Exception as e:
             error(f"🦖 Error fetching current user: {e}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-            logger.error(f"[get_current_user] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            contextual_log('error', f"[get_current_user] Exception: {e}", exc_info=True, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
         return
     # Only now check for FEATURE_REGISTRY
     if key not in FEATURE_REGISTRY:
         error(f"{feature_tag} Unknown feature: {feature}", extra={"feature": feature, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-        logger.error(f"{feature_tag} Unknown feature: {feature}", exc_info=True, extra={"feature": feature, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+        contextual_log('error', f"{feature_tag} Unknown feature: {feature}", exc_info=True, extra={"feature": feature, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
         return
-    logger.info(f"{feature_tag} Dispatching feature: {key} | Options: {redact_sensitive(options)} {context}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+    contextual_log('info', f"{feature_tag} Dispatching feature: {key} | Options: {redact_sensitive(options)} {context}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
     # --- Refactored: Parameter gathering and validation before spinner ---
     prompt_func_name = f"prompt_{key}_options"
     prompt_func = None
@@ -434,34 +432,34 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
     if prompt_func:
         params = prompt_func(options)
         if not params:
-            info(f"{feature_tag} Feature '{key}' cancelled or missing parameters.", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+            contextual_log('info', f"{feature_tag} Feature '{key}' cancelled or missing parameters.", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
             return
     else:
         params = options
     # Now call the feature handler (which should only perform the operation, with spinner inside if needed)
     FEATURE_REGISTRY[key](jira, params, user_email=user_email, batch_index=batch_index, unique_suffix=unique_suffix)
-    info(f"{feature_tag} Feature '{key}' complete.", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-    logger.info(f"{feature_tag} Feature '{key}' complete. {context}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+    contextual_log('info', f"{feature_tag} Feature '{key}' complete.", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+    contextual_log('info', f"{feature_tag} Feature '{key}' complete. {context}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
 
 def test_connection(jira: JiraClient, options: dict = None, context: str = "") -> None:
     with spinner("Testing Jira connection..."):
         try:
             # Log parameters
-            logger.info(f"🦖 [test_connection] Parameters: url={jira.base_url}, email={jira.auth[0]}", extra={"feature": "test_connection", "user": jira.auth[0], "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 [test_connection] Parameters: url={jira.base_url}, email={jira.auth[0]}", extra={"feature": "test_connection", "user": jira.auth[0], "batch": None, "suffix": None})
             # Log full request details
             endpoint = 'myself'
             headers = jira.headers
             params = None
-            logger.info(f"🦖 [test_connection] Request: endpoint={endpoint}, headers={headers}, params={params}", extra={"feature": "test_connection", "user": jira.auth[0], "batch": None, "suffix": None})
-            logger.info(f"🦖 [test_connection] Starting Jira connection test. {context}", extra={"feature": "test_connection", "user": None, "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 [test_connection] Request: endpoint={endpoint}, headers={headers}, params={params}", extra={"feature": "test_connection", "user": jira.auth[0], "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 [test_connection] Starting Jira connection test. {context}", extra={"feature": "test_connection", "user": None, "batch": None, "suffix": None})
             user = jira.get(endpoint)
-            logger.info(f"🦖 [test_connection] Response: {user}", extra={"feature": "test_connection", "user": jira.auth[0], "batch": None, "suffix": None})
-            logger.info(f"🦖 [test_connection] Jira connection successful. User: {user} {context}", extra={"feature": "test_connection", "user": user.get('displayName', user.get('name', 'Unknown')), "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 [test_connection] Response: {user}", extra={"feature": "test_connection", "user": jira.auth[0], "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 [test_connection] Jira connection successful. User: {user} {context}", extra={"feature": "test_connection", "user": user.get('displayName', user.get('name', 'Unknown')), "batch": None, "suffix": None})
             print(f"{JUNGLE_GREEN}🦖 Connection successful! Logged in as: {user.get('displayName', user.get('name', 'Unknown'))}{RESET}")
-            logger.info("🦖 [test_connection] Welcome to Jurassic Park.", extra={"feature": "cli", "user": user.get('email'), "batch": None, "suffix": None})
+            contextual_log('info', "🦖 [test_connection] Welcome to Jurassic Park.", extra={"feature": "cli", "user": user.get('email'), "batch": None, "suffix": None})
             info("🦖 Welcome to Jurassic Park.")
         except Exception as e:
-            logger.error(f"🦖 [test_connection] Failed to connect to Jira: {e} {context}", exc_info=True, extra={"feature": "test_connection", "user": None, "batch": None, "suffix": None})
+            contextual_log('error', f"🦖 [test_connection] Failed to connect to Jira: {e} {context}", exc_info=True, extra={"feature": "test_connection", "user": None, "batch": None, "suffix": None})
             error(f"🦖 Failed to connect to Jira: {e}", extra={"feature": "test_connection", "user": None, "batch": None, "suffix": None})
 
 def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -> None:
@@ -478,14 +476,14 @@ def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -
                     for user in users:
                         f.write(f"- {user.get('displayName', user.get('name', 'Unknown'))} ({user.get('emailAddress', 'N/A')})\n")
                 print(f"{JUNGLE_GREEN}🦖 User list written to {filename}{RESET}")
-                logger.info("🦖 Objects in mirror are closer than they appear.", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
+                contextual_log('info', "🦖 Objects in mirror are closer than they appear.", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
                 info("🦖 Objects in mirror are closer than they appear.")
             except Exception as file_err:
                 error(f"🦖 Failed to write user list to file: {file_err}", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
-                logger.error(f"[output_all_users] File write error: {file_err}", exc_info=True, extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
+                contextual_log('error', f"[output_all_users] File write error: {file_err}", exc_info=True, extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
         except Exception as e:
             error(f"🦖 Failed to fetch users: {e}", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
-            logger.error(f"[output_all_users] Exception: {e}", exc_info=True, extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
+            contextual_log('error', f"[output_all_users] Exception: {e}", exc_info=True, extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
 
 # --- Section Header with ASCII Art ---
 def print_section_header(title: str, feature_key: str = None):
