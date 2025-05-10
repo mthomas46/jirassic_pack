@@ -1,0 +1,133 @@
+# Example config.yaml for jirassicPack
+# You can use this file to run a single feature or multiple features in batch mode.
+# All options can also be set via environment variables (see .env.example).
+
+# --- Single Feature Example ---
+# Uncomment this block to run a single feature
+#feature: "create_issue"
+#jira:
+#  url: "https://your-domain.atlassian.net"
+#  email: "your-email@example.com"
+#  api_token: "your-api-token"
+#options:
+#  project: "PROJ"                # Project key
+#  issue_type: "Task"             # Issue type (Task, Bug, etc.)
+#  summary: "Automated issue"     # Issue summary/title
+#  description: "Created from config" # Issue description
+#  output_dir: "output"           # Output directory (optional)
+#  dry_run: true                  # If true, no changes are made to Jira (optional)
+
+# --- Batch (Multiple Features) Example ---
+features:
+  - name: create_issue
+    options:
+      project: "PROJ"
+      issue_type: "Task"
+      summary: "First issue"
+      description: "First dry run"
+      output_dir: "output"
+      dry_run: true
+  - name: update_issue
+    options:
+      issue_key: "PROJ-123"
+      field: "summary"
+      value: "Dry run update"
+      output_dir: "output"
+      dry_run: true
+  - name: bulk_operations
+    options:
+      jql: "project = PROJ AND status = 'To Do'"
+      bulk_action: "comment"         # 'comment' or 'update_field'
+      bulk_comment: "Bulk comment text"
+      output_dir: "output"
+      dry_run: true
+  - name: user_team_analytics
+    options:
+      team: "user1,user2"
+      start_date: "2024-01-01"
+      end_date: "2024-01-31"
+      output_dir: "output"
+  - name: integration_tools
+    options:
+      integration_jql: "project = PROJ AND status = 'Done'"
+      output_dir: "output"
+  - name: time_tracking_worklogs
+    options:
+      user: "user1"
+      start_date: "2024-01-01"
+      end_date: "2024-01-31"
+      output_dir: "output"
+  - name: automated_documentation
+    options:
+      doc_type: "Release notes"      # Release notes, Changelog, or Sprint review
+      fix_version: "1.0.0"           # For release notes/changelog
+      sprint_name: "Sprint 1"         # For sprint review
+      changelog_start: "2024-01-01"  # For changelog
+      changelog_end: "2024-01-31"    # For changelog
+      output_dir: "output"
+  - name: advanced_metrics
+    options:
+      user: "user1"
+      start_date: "2024-01-01"
+      end_date: "2024-01-31"
+      output_dir: "output"
+  - name: summarize_tickets
+    options:
+      user: "user1"
+      start_date: "2024-01-01"
+      end_date: "2024-01-31"
+      acceptance_criteria_field: "customfield_10001" # Custom field ID for acceptance criteria
+      output_dir: "output"
+  - name: gather_metrics
+    options:
+      user: "user1"
+      start_date: "2024-01-01"
+      end_date: "2024-01-31"
+      output_dir: "output"
+jira:
+  url: "https://your-domain.atlassian.net"
+  email: "your-email@example.com"
+  api_token: "your-api-token"
+
+# Legacy single-feature config (still supported):
+# feature: "create_issue"
+# options:
+#   ...
+
+options:
+  # Common options
+  user: "jira-username"
+  start_date: "2024-01-01"
+  end_date: "2024-01-31"
+  output_dir: "output"
+
+  # For create_issue
+  project: "PROJ"
+  issue_type: "Task"
+  summary: "Example summary"
+  description: "Example description"
+
+  # For update_issue
+  issue_key: "PROJ-123"
+  field: "summary"
+  value: "Updated summary"
+
+  # For bulk_operations
+  jql: "project = PROJ AND status = 'To Do'"
+  bulk_action: "Add comment"  # or "Update field"
+  bulk_comment: "Bulk comment text"
+  bulk_field: "summary"
+  bulk_value: "Bulk updated summary"
+
+  # For user_team_analytics
+  team: "user1,user2,user3"
+
+  # For integration_tools
+  integration_jql: "project = PROJ"
+
+  # For automated_documentation
+  doc_type: "Release notes"  # or "Changelog", "Sprint review"
+  fix_version: "v1.0.0"
+  changelog_start: "2024-01-01"
+  changelog_end: "2024-01-31"
+  sprint_name: "Sprint 1" 
