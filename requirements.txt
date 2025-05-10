@@ -1,0 +1,4 @@
+requests
+PyYAML
+questionary
+python-dotenv 
