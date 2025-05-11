@@ -3,8 +3,8 @@
 # It prompts the user for the documentation type, project, and relevant filters (version or sprint), then fetches issues and writes a Markdown report.
 
 from typing import Any, Dict, List
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive, get_valid_project_key, get_option
-from jirassicpack.utils import error, info, spinner, info_spared_no_expense, prompt_with_validation, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log
+from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive, get_valid_project_key
+from jirassicpack.utils import error, info, spinner, info_spared_no_expense, prompt_with_validation, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log, get_option
 
 def prompt_automated_doc_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
