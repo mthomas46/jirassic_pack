@@ -2,29 +2,31 @@
 # This feature summarizes worklogs for a given Jira user and timeframe.
 # It prompts for user, start/end dates, fetches issues with worklogs, and outputs a Markdown report with worklog details per issue.
 
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import prompt_with_validation, get_option, validate_required, validate_date, error, info, spinner, info_spared_no_expense, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log
+from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive, get_valid_user, get_option
+from jirassicpack.utils import prompt_with_validation, validate_required, validate_date, error, info, spinner, info_spared_no_expense, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log
 from datetime import datetime
 from typing import Any, Dict, List
 import time
 
-def prompt_time_tracking_options(options: Dict[str, Any]) -> Dict[str, Any]:
+def prompt_time_tracking_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for time tracking options using get_option utility.
-    Prompts for user, start date, and end date.
-    Returns a dictionary of all options needed for the worklog summary.
+    Prompt for time tracking options using Jira-aware helpers for user selection.
     """
-    user = get_option(options, 'user', prompt="Jira Username for worklogs:", required=True)
-    start_date = get_option(options, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
-    end_date = get_option(options, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
+    usr = opts.get('user')
+    if not usr and jira:
+        usr = get_valid_user(jira)
+    elif not usr:
+        usr = get_option(opts, 'user', prompt="Jira Username for worklogs:", required=True)
+    start = get_option(opts, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
+    end = get_option(opts, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
+    out_dir = get_option(opts, 'output_dir', default='output')
+    suffix = opts.get('unique_suffix', '')
     return {
-        'user': user,
-        'start_date': start_date,
-        'end_date': end_date,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
+        'user': usr,
+        'start_date': start,
+        'end_date': end,
+        'output_dir': out_dir,
+        'unique_suffix': suffix
     }
 
 def write_worklog_summary_file(filename: str, user: str, start_date: str, end_date: str, issues: list, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:

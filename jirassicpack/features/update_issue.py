@@ -2,29 +2,33 @@
 # This feature allows users to update a field on an existing Jira issue by prompting for the issue key, field, and new value.
 # It writes the updated field and value to a Markdown file for record-keeping.
 
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
+from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, get_valid_field, get_option
+from jirassicpack.utils import validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log, redact_sensitive
 from typing import Any, Dict
 import json
 import time
 
-def prompt_update_issue_options(options: Dict[str, Any]) -> Dict[str, Any]:
+def prompt_update_issue_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for update issue options using get_option utility.
-    Prompts for issue key, field to update, and new value.
-    Returns a dictionary of all options needed to update the issue.
+    Prompt for update issue options using Jira-aware helpers for field selection.
     """
-    issue_key = get_option(options, 'issue_key', prompt="🦕 Jira Issue Key:")
-    field = get_option(options, 'field', prompt="🦕 Field to update (e.g., summary, description, status):")
-    value = get_option(options, 'value', prompt="🦕 New value:")
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
+    key = get_option(opts, 'issue_key', prompt="🦕 Jira Issue Key:")
+    fld = opts.get('field')
+    proj = opts.get('project')
+    itype = opts.get('issue_type')
+    if not fld and jira and proj and itype:
+        fld = get_valid_field(jira, proj, itype)
+    elif not fld:
+        fld = get_option(opts, 'field', prompt="🦕 Field to update (e.g., summary, description, status):")
+    val = get_option(opts, 'value', prompt="🦕 New value:")
+    out_dir = get_option(opts, 'output_dir', default='output')
+    suffix = opts.get('unique_suffix', '')
     return {
-        'issue_key': issue_key,
-        'field': field,
-        'value': value,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
+        'issue_key': key,
+        'field': fld,
+        'value': val,
+        'output_dir': out_dir,
+        'unique_suffix': suffix
     }
 
 def write_update_issue_file(filename: str, issue_key: str, field: str, value: str, user_email=None, batch_index=None, unique_suffix=None, context=None, result=None) -> None:

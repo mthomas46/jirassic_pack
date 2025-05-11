@@ -3,30 +3,35 @@
 # It prompts the user for the desired action, the JQL to select issues, and the value for the action (if needed).
 # Results are written to a Markdown report for traceability.
 
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, print_batch_summary, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, error, info, spinner, progress_bar, BULK_ACTIONS, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
+from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, print_batch_summary, logger, get_valid_transition, get_valid_user, get_option
+from jirassicpack.utils import validate_required, error, info, spinner, progress_bar, BULK_ACTIONS, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log, redact_sensitive
 from typing import Any, Dict, List, Tuple
 import questionary
 import json
 import time
 
-def prompt_bulk_options(options: Dict[str, Any]) -> Dict[str, Any]:
+def prompt_bulk_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for bulk operation options using get_option utility.
-    Prompts for the action (transition, comment, assign), the JQL to select issues, and the value for the action if applicable.
-    Returns a dictionary of all options needed for the bulk operation.
+    Prompt for bulk operation options using Jira-aware helpers for value selection.
     """
-    action = get_option(options, 'action', prompt="🦴 Bulk action:", choices=BULK_ACTIONS)
-    jql = get_option(options, 'jql', prompt="🦴 JQL for selecting issues:")
-    value = get_option(options, 'value', prompt="🦴 Value for action (if applicable):", default='')
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
+    act = get_option(opts, 'action', prompt="🦴 Bulk action:", choices=BULK_ACTIONS)
+    jql = get_option(opts, 'jql', prompt="🦴 JQL for selecting issues:")
+    val = opts.get('value', '')
+    if not val and jira and act == 'transition':
+        key = opts.get('issue_key') or get_option(opts, 'issue_key', prompt="🦴 Issue Key for transition:")
+        val = get_valid_transition(jira, key)
+    elif not val and jira and act == 'assign':
+        val = get_valid_user(jira)
+    elif not val:
+        val = get_option(opts, 'value', prompt="🦴 Value for action (if applicable):", default='')
+    out_dir = get_option(opts, 'output_dir', default='output')
+    suffix = opts.get('unique_suffix', '')
     return {
-        'action': action,
+        'action': act,
         'jql': jql,
-        'value': value,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
+        'value': val,
+        'output_dir': out_dir,
+        'unique_suffix': suffix
     }
 
 def write_bulk_report(filename: str, action: str, results: list, user_email=None, batch_index=None, unique_suffix=None, context=None, summary=None) -> None:

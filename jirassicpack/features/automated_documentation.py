@@ -3,34 +3,36 @@
 # It prompts the user for the documentation type, project, and relevant filters (version or sprint), then fetches issues and writes a Markdown report.
 
 from typing import Any, Dict, List
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log
+from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive, get_valid_project_key, get_option
+from jirassicpack.utils import error, info, spinner, info_spared_no_expense, prompt_with_validation, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log
 
-def prompt_automated_doc_options(options: Dict[str, Any]) -> Dict[str, Any]:
+def prompt_automated_doc_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for automated documentation options using get_option utility.
-    Prompts for documentation type (Release notes, Changelog, Sprint Review), project key, version, and sprint as needed.
-    Returns a dictionary of all options needed for documentation generation.
+    Prompt for automated documentation options using Jira-aware helpers for project selection.
     """
     doc_type = get_option(
-        options,
+        opts,
         'doc_type',
         prompt="Select documentation type:",
         choices=["Release notes", "Changelog", "Sprint Review"],
         required=True
     )
-    project = get_option(options, 'project', prompt="Jira Project Key:", required=True)
-    version = get_option(options, 'version', prompt="Version (for Release notes):", default='')
-    sprint = get_option(options, 'sprint', prompt="Sprint name (for Sprint Review):", default='')
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
+    proj = opts.get('project')
+    if not proj and jira:
+        proj = get_valid_project_key(jira)
+    elif not proj:
+        proj = get_option(opts, 'project', prompt="Jira Project Key:", required=True)
+    version = get_option(opts, 'version', prompt="Version (for Release notes):", default='')
+    sprint = get_option(opts, 'sprint', prompt="Sprint name (for Sprint Review):", default='')
+    out_dir = get_option(opts, 'output_dir', default='output')
+    suffix = opts.get('unique_suffix', '')
     return {
         'doc_type': doc_type,
-        'project': project,
+        'project': proj,
         'version': version,
         'sprint': sprint,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
+        'output_dir': out_dir,
+        'unique_suffix': suffix
     }
 
 def write_automated_doc_file(filename: str, doc_type: str, issues: list, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:

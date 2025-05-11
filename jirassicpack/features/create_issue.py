@@ -2,32 +2,38 @@
 # This feature allows users to create a new Jira issue by prompting for project, summary, description, and issue type.
 # It writes the created issue's key and summary to a Markdown file for record-keeping.
 
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
+from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, get_valid_project_key, get_valid_issue_type, get_option
+from jirassicpack.utils import error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log, redact_sensitive
 from typing import Any, Dict
 import logging
 import json
 import time
 
-def prompt_create_issue_options(options: Dict[str, Any]) -> Dict[str, Any]:
+def prompt_create_issue_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for create issue options using get_option utility.
-    Prompts for project key, summary, description, and issue type.
-    Returns a dictionary of all options needed to create the issue.
+    Prompt for create issue options using Jira-aware helpers for project and issue type.
     """
-    project = get_option(options, 'project', prompt="🦖 Jira Project Key:")
-    summary = get_option(options, 'summary', prompt="🦖 Issue Summary:")
-    description = get_option(options, 'description', prompt="🦖 Issue Description:", default='')
-    issue_type = get_option(options, 'issue_type', prompt="🦖 Issue Type:", default='Task')
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
+    proj = opts.get('project')
+    if not proj and jira:
+        proj = get_valid_project_key(jira)
+    elif not proj:
+        proj = get_option(opts, 'project', prompt="🦖 Jira Project Key:")
+    summ = get_option(opts, 'summary', prompt="🦖 Issue Summary:")
+    desc = get_option(opts, 'description', prompt="🦖 Issue Description:", default='')
+    itype = opts.get('issue_type')
+    if not itype and jira and proj:
+        itype = get_valid_issue_type(jira, proj)
+    elif not itype:
+        itype = get_option(opts, 'issue_type', prompt="🦖 Issue Type:", default='Task')
+    out_dir = get_option(opts, 'output_dir', default='output')
+    suffix = opts.get('unique_suffix', '')
     return {
-        'project': project,
-        'summary': summary,
-        'description': description,
-        'issue_type': issue_type,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
+        'project': proj,
+        'summary': summ,
+        'description': desc,
+        'issue_type': itype,
+        'output_dir': out_dir,
+        'unique_suffix': suffix
     }
 
 def write_create_issue_file(filename: str, issue_key: str, summary: str, user_email=None, batch_index=None, unique_suffix=None, context=None, issue=None) -> None:

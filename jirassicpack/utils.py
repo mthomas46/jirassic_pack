@@ -22,6 +22,16 @@ colorama_init(autoreset=True)
 DOC_TYPES = ["Release notes", "Changelog", "Sprint review"]
 BULK_ACTIONS = ["Add comment", "Update field"]
 
+REDACT_KEYS = {'api_token', 'password', 'token'}
+
+def redact_sensitive(d):
+    """Recursively redact sensitive fields in a dict or list."""
+    if isinstance(d, dict):
+        return {k: ('***' if k in REDACT_KEYS else redact_sensitive(v)) for k, v in d.items()}
+    if isinstance(d, list):
+        return [redact_sensitive(i) for i in d]
+    return d
+
 # Spinner context manager for network/file operations
 def spinner(text: str, hold_on: bool = False):
     """
@@ -52,7 +62,7 @@ def contextual_log(level, msg, extra=None, exc_info=None, params=None, result=No
     Log with enriched context: feature, user, batch, suffix, function, operation_id, params, result, and exception info.
     Adds: operation, status, error_type, correlation_id, duration_ms, output_file, retry_count, env, cli_version, hostname, pid.
     """
-    from jirassicpack.cli import logger, redact_sensitive, CLI_VERSION, HOSTNAME, PID  # Avoid circular import
+    from jirassicpack.cli import logger, CLI_VERSION, HOSTNAME, PID  # Avoid circular import
     frame = inspect.currentframe().f_back
     func_name = frame.f_code.co_name
     operation_id = str(uuid.uuid4())

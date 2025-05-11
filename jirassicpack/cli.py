@@ -7,7 +7,7 @@ from jirassicpack.config import ConfigLoader
 from jirassicpack.jira_client import JiraClient
 import questionary
 from typing import Any, Dict
-from jirassicpack.utils import error, info, spinner, progress_bar, contextual_log
+from jirassicpack.utils import error, info, spinner, progress_bar, contextual_log, redact_sensitive
 from colorama import Fore, Style
 import pyfiglet
 from pythonjsonlogger import jsonlogger
@@ -16,6 +16,9 @@ from dotenv import load_dotenv
 import uuid
 import platform
 import socket
+from datetime import datetime
+import re
+import inspect
 
 load_dotenv()
 
@@ -46,15 +49,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("jirassicpack")
 
-# Redact sensitive data in config
-REDACT_KEYS = {'api_token', 'password', 'token'}
-def redact_sensitive(d):
-    if isinstance(d, dict):
-        return {k: ('***' if k in REDACT_KEYS else redact_sensitive(v)) for k, v in d.items()}
-    elif isinstance(d, list):
-        return [redact_sensitive(i) for i in d]
-    return d
-
 # cli.py
 # This module provides the command-line interface (CLI) entrypoint for the jirassicPack tool.
 # It handles argument parsing, configuration loading, and dispatches to the appropriate feature based on user input or config.
@@ -77,7 +71,6 @@ JIRASSIC_ASCII = r'''
 ||<__.|_|-|_|       <__.|_|-|_|     ||<__.|_|-|_|       <__.|_|-|_|     ||
 ||      |  |   ________   |  |      ||      |  |   ________   |  |      ||
 ||      |  |  |  __  __|  |  |      ||      |  |  |  __  __|  |  |      ||
-||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
 ||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
 ||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
 ||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
@@ -150,24 +143,15 @@ def register_features():
         "summarize_tickets": summarize_tickets,
         "sprint_board_management": sprint_board_management,
     }
+    FEATURE_REGISTRY["log_parser"] = log_parser
 
-# --- Feature Groupings ---
+# --- Feature Groupings (Reordered for UX) ---
 FEATURE_GROUPS = {
-    "Jira Connection & Users": [
-        ("🧪 Test connection to Jira", "test_connection"),
-        ("👥 Output all users", "output_all_users"),
-        ("🧑‍💻 Get user by accountId/email", "get_user"),
-        ("🔍 Search users", "search_users"),
-        ("🔎 Search users by displayname and email", "search_users_by_displayname_email"),
-        ("🏷️ Get user property", "get_user_property"),
-        ("🙋 Get current user (myself)", "get_current_user"),
-    ],
     "Issues & Tasks": [
         ("📝 Create a new issue", "create_issue"),
         ("✏️ Update an existing issue", "update_issue"),
-        ("📋 Get task (issue)", "get_task"),
         ("🔁 Bulk operations", "bulk_operations"),
-        ("⬅️ Return to previous menu", "return_to_main_menu"),
+        ("📋 Get task (issue)", "get_task"),
     ],
     "Boards & Sprints": [
         ("📋 Sprint and board management", "sprint_board_management"),
@@ -182,6 +166,19 @@ FEATURE_GROUPS = {
     "Integrations & Docs": [
         ("🔗 Integration with other tools", "integration_tools"),
         ("📄 Automated documentation", "automated_documentation"),
+    ],
+    "Jira Connection & Users": [
+        ("🧪 Test connection to Jira", "test_connection"),
+        ("👥 Output all users", "output_all_users"),
+        ("🧑‍💻 Get user by accountId/email", "get_user"),
+        ("🔍 Search users", "search_users"),
+        ("🔎 Search users by displayname and email", "search_users_by_displayname_email"),
+        ("🏷️ Get user property", "get_user_property"),
+        ("🙋 Get current user (myself)", "get_current_user"),
+        ("⚙️ Get mypreferences", "get_mypreferences"),
+    ],
+    "Logs & Diagnostics": [
+        ("🔍 Search logs for points of interest", "log_parser"),
     ],
     "Preferences": [
         ("⚙️ Get mypreferences", "get_mypreferences"),
@@ -332,7 +329,8 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         "🏷️ Get user property": "get_user_property",
         "📋 Get task (issue)": "get_task",
         "⚙️ Get mypreferences": "get_mypreferences",
-        "🙋 Get current user (myself)": "get_current_user"
+        "🙋 Get current user (myself)": "get_current_user",
+        "🔍 Search logs for points of interest": "log_parser",
     }
     key = menu_to_key.get(feature, feature)
     context = f"User: {user_email} | Batch: {batch_index} | Suffix: {unique_suffix}" if user_email or batch_index or unique_suffix else ""
@@ -448,7 +446,12 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         except Exception:
             prompt_func = None
     if prompt_func:
-        params = prompt_func(options)
+        # Pass jira to prompt_func if it accepts it
+        sig = inspect.signature(prompt_func)
+        if 'jira' in sig.parameters:
+            params = prompt_func(options, jira=jira)
+        else:
+            params = prompt_func(options)
         if not params:
             contextual_log('info', f"{feature_tag} Feature '{key}' cancelled or missing parameters.", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
             return
@@ -566,6 +569,353 @@ def pretty_print_result(result):
 CLI_VERSION = "1.0.0"  # Update as needed
 HOSTNAME = socket.gethostname()
 PID = os.getpid()
+
+def log_parser(*args, **kwargs):
+    log_file = LOG_FILE
+    if not os.path.exists(log_file):
+        error(f"Log file '{log_file}' does not exist.")
+        return
+    # --- Prompt for search type ---
+    search_types = [
+        ("Feature start", r'operation.*feature_start'),
+        ("Feature end", r'operation.*feature_end'),
+        ("Errors", r'level.*error'),
+        ("Output writes", r'operation.*output_write'),
+        ("Warnings", r'level.*warning'),
+        ("Custom search", None),
+    ]
+    choice = questionary.select(
+        "What do you want to search for in the logs?",
+        choices=[name for name, _ in search_types],
+        style=questionary.Style([
+            ("selected", "fg:#22bb22 bold"),
+            ("pointer", "fg:#ffcc00 bold"),
+        ])
+    ).ask()
+    pattern = None
+    for name, pat in search_types:
+        if name == choice:
+            pattern = pat
+            break
+    if choice == "Custom search":
+        pattern = questionary.text("Enter a regex or keyword to search for:").ask()
+    if not pattern:
+        error("No search pattern provided.")
+        return
+    # --- Extract all unique features from the log file ---
+    feature_choices = ["(all)"]
+    try:
+        features_set = set()
+        with open(log_file, 'r') as f:
+            for line in f:
+                try:
+                    if LOG_FORMAT == 'json':
+                        data = json.loads(line)
+                        feat = data.get('feature')
+                        if feat:
+                            features_set.add(str(feat))
+                    else:
+                        # crude parse for plain text logs
+                        m = re.search(r'feature[": ]+([\w_]+)', line)
+                        if m:
+                            features_set.add(m.group(1))
+                except Exception:
+                    continue
+        feature_choices += sorted(features_set)
+    except Exception:
+        pass
+    # --- Prompt for feature filter ---
+    if len(feature_choices) > 1:
+        feature_filter = questionary.select(
+            "Filter by feature:",
+            choices=feature_choices,
+            default="(all)",
+            style=questionary.Style([
+                ("selected", "fg:#22bb22 bold"),
+                ("pointer", "fg:#ffcc00 bold"),
+            ])
+        ).ask()
+        if feature_filter == "(all)":
+            feature_filter = ""
+    else:
+        feature_filter = questionary.text("Filter by feature (leave blank for all):").ask()
+    # --- User filter ---
+    user_filter = questionary.text("Filter by user (leave blank for all):").ask()
+    # Log level filter
+    log_levels = ["", "info", "warning", "error", "debug"]
+    log_level_filter = questionary.select(
+        "Filter by log level:",
+        choices=["(all)"] + log_levels[1:],
+        default="(all)",
+        style=questionary.Style([
+            ("selected", "fg:#22bb22 bold"),
+            ("pointer", "fg:#ffcc00 bold"),
+        ])
+    ).ask()
+    if log_level_filter == "(all)":
+        log_level_filter = ""
+    # Date range filter
+    start_date = questionary.text("Start date (YYYY-MM-DD, leave blank for earliest):").ask()
+    end_date = questionary.text("End date (YYYY-MM-DD, leave blank for latest):").ask()
+    def parse_date(s):
+        try:
+            return datetime.strptime(s, "%Y-%m-%d")
+        except Exception:
+            return None
+    start_dt = parse_date(start_date) if start_date else None
+    end_dt = parse_date(end_date) if end_date else None
+    # --- Search the log file ---
+    matches = []
+    features = set()
+    levels = {}
+    min_time = None
+    max_time = None
+    def colorize(level, msg):
+        if level == "error":
+            return f"\033[91m{msg}\033[0m"  # Red
+        elif level == "warning":
+            return f"\033[93m{msg}\033[0m"  # Yellow
+        elif level == "info":
+            return f"\033[92m{msg}\033[0m"  # Green
+        elif level == "debug":
+            return f"\033[96m{msg}\033[0m"  # Cyan
+        else:
+            return msg
+    with open(log_file, 'r') as f:
+        for line in f:
+            try:
+                if LOG_FORMAT == 'json':
+                    data = json.loads(line)
+                    # --- Filtering logic ---
+                    if not re.search(pattern, json.dumps(data)):
+                        continue
+                    if feature_filter and str(data.get("feature", "")).lower() != feature_filter.lower():
+                        continue
+                    if user_filter and str(data.get("user", "")).lower() != user_filter.lower():
+                        continue
+                    if log_level_filter and str(data.get("level", "")).lower() != log_level_filter.lower():
+                        continue
+                    # Date/time filtering
+                    ts = data.get("asctime") or data.get("timestamp")
+                    dt = None
+                    if ts:
+                        try:
+                            dt = datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
+                    if start_dt and dt and dt < start_dt:
+                        continue
+                    if end_dt and dt and dt > end_dt:
+                        continue
+                    # Track stats
+                    features.add(data.get("feature", ""))
+                    lvl = str(data.get("level", "")).lower()
+                    levels[lvl] = levels.get(lvl, 0) + 1
+                    if dt:
+                        if not min_time or dt < min_time:
+                            min_time = dt
+                        if not max_time or dt > max_time:
+                            max_time = dt
+                    matches.append(data)
+                else:
+                    if not re.search(pattern, line):
+                        continue
+                    if feature_filter and feature_filter.lower() not in line.lower():
+                        continue
+                    if user_filter and user_filter.lower() not in line.lower():
+                        continue
+                    if log_level_filter and log_level_filter.lower() not in line.lower():
+                        continue
+                    # Date filtering for plain text: skip (unless you want to parse)
+                    matches.append(line.strip())
+            except Exception:
+                continue
+    if not matches:
+        info(f"No log entries found for: {choice}")
+        return
+    # --- Summary statistics ---
+    info(f"Found {len(matches)} log entries for: {choice}")
+    if LOG_FORMAT == 'json':
+        print("\nSummary:")
+        print("Level     | Count")
+        print("----------|------")
+        for lvl, count in levels.items():
+            print(f"{lvl:<9} | {count}")
+        print(f"Unique features: {len(features)}: {', '.join(sorted(f for f in features if f))}")
+        if min_time and max_time:
+            print(f"Time range: {min_time} to {max_time}")
+    # --- Pagination ---
+    page_size = 20
+    total = len(matches)
+    page = 0
+    while True:
+        start = page * page_size
+        end = min(start + page_size, total)
+        print(f"\nShowing results {start+1}-{end} of {total}:")
+        for entry in matches[start:end]:
+            if isinstance(entry, dict):
+                lvl = str(entry.get("level", "")).lower()
+                msg = entry.get("message") or entry.get("msg") or json.dumps(entry)
+                print(colorize(lvl, f"[{lvl.upper()}] {msg}"))
+                # Optionally pretty-print the whole entry
+                print(json.dumps(entry, indent=2))
+            else:
+                print(entry)
+        if end == total:
+            break
+        nav = questionary.select(
+            f"Page {page+1}/{(total-1)//page_size+1}. Next/Prev?",
+            choices=["Next", "Prev", "Exit"],
+            default="Next",
+            style=questionary.Style([
+                ("selected", "fg:#22bb22 bold"),
+                ("pointer", "fg:#ffcc00 bold"),
+            ])
+        ).ask()
+        if nav == "Next":
+            page += 1
+        elif nav == "Prev" and page > 0:
+            page -= 1
+        else:
+            break
+    # --- Export option ---
+    export = questionary.confirm("Export these results to a file?").ask()
+    if export:
+        export_fmt = questionary.select(
+            "Export format:",
+            choices=["JSON", "Text"],
+            default="JSON",
+            style=questionary.Style([
+                ("selected", "fg:#22bb22 bold"),
+                ("pointer", "fg:#ffcc00 bold"),
+            ])
+        ).ask()
+        fname = questionary.text("Enter filename to export to:", default="filtered_logs.json" if export_fmt=="JSON" else "filtered_logs.txt").ask()
+        with open(fname, 'w') as f:
+            if export_fmt == "JSON":
+                json.dump(matches, f, indent=2, default=str)
+            else:
+                for entry in matches:
+                    if isinstance(entry, dict):
+                        f.write(json.dumps(entry) + "\n")
+                    else:
+                        f.write(str(entry) + "\n")
+        info(f"Exported {len(matches)} log entries to {fname}")
+
+# --- Enhanced get_option with validation for all user-typed input prompts ---
+def get_validated_input(prompt, validate_fn=None, error_msg=None, default=None, regex=None, date_format=None, min_date=None, max_date=None):
+    retry_count = 0
+    while True:
+        value = questionary.text(prompt, default=default or '').ask()
+        contextual_log('info', f"User prompted for validated input: {prompt}", operation="user_prompt", status="answered", params={"prompt": prompt}, retry_count=retry_count, extra={"feature": "get_validated_input"})
+        # Regex validation
+        if regex:
+            if not re.match(regex, value or ""):
+                contextual_log('warning', f"Input failed regex validation: {prompt}", operation="input_validation", status="failed", params={"prompt": prompt, "regex": regex, "value": value}, retry_count=retry_count, extra={"feature": "get_validated_input"})
+                print(f"\033[91m{error_msg or 'Input does not match required format.'}\033[0m")
+                retry_count += 1
+                continue
+        # Date/time validation
+        if date_format:
+            try:
+                dt = datetime.strptime(value, date_format)
+                if min_date and dt < min_date:
+                    contextual_log('warning', f"Input date before min_date: {prompt}", operation="input_validation", status="failed", params={"prompt": prompt, "date_format": date_format, "value": value, "min_date": min_date}, retry_count=retry_count, extra={"feature": "get_validated_input"})
+                    print(f"\033[91mDate/time must be after {min_date.strftime(date_format)}.\033[0m")
+                    retry_count += 1
+                    continue
+                if max_date and dt > max_date:
+                    contextual_log('warning', f"Input date after max_date: {prompt}", operation="input_validation", status="failed", params={"prompt": prompt, "date_format": date_format, "value": value, "max_date": max_date}, retry_count=retry_count, extra={"feature": "get_validated_input"})
+                    print(f"\033[91mDate/time must be before {max_date.strftime(date_format)}.\033[0m")
+                    retry_count += 1
+                    continue
+            except Exception:
+                contextual_log('warning', f"Input failed date format validation: {prompt}", operation="input_validation", status="failed", params={"prompt": prompt, "date_format": date_format, "value": value}, retry_count=retry_count, extra={"feature": "get_validated_input"})
+                print(f"\033[91m{error_msg or f'Input must match date format {date_format}.'}\033[0m")
+                retry_count += 1
+                continue
+        # Custom validation function
+        if validate_fn:
+            if not validate_fn(value):
+                contextual_log('warning', f"Input failed custom validation: {prompt}", operation="input_validation", status="failed", params={"prompt": prompt, "value": value}, retry_count=retry_count, extra={"feature": "get_validated_input"})
+                print(f"\033[91m{error_msg or 'Invalid input.'}\033[0m")
+                retry_count += 1
+                continue
+        # Required check
+        if not value or not value.strip():
+            contextual_log('warning', f"Input required but empty: {prompt}", operation="input_validation", status="failed", params={"prompt": prompt}, retry_count=retry_count, extra={"feature": "get_validated_input"})
+            print("\033[91mInput is required.\033[0m")
+            retry_count += 1
+            continue
+        contextual_log('info', f"Input validated successfully: {prompt}", operation="input_validation", status="success", params={"prompt": prompt, "value": value}, retry_count=retry_count, extra={"feature": "get_validated_input"})
+        return value
+
+# --- Jira-aware input helpers ---
+SELECT_MENU_STYLE = questionary.Style([
+    ("selected", "fg:#22bb22 bold"),  # Jungle green
+    ("pointer", "fg:#ffcc00 bold"),   # Yellow
+])
+
+def get_valid_project_key(jira):
+    try:
+        projects = jira.get('project')
+        project_keys = [p['key'] for p in projects]
+        return questionary.select(
+            "Select a Jira Project:",
+            choices=project_keys,
+            style=SELECT_MENU_STYLE
+        ).ask()
+    except Exception:
+        return get_validated_input('Enter Jira Project Key:', regex=r'^[A-Z][A-Z0-9]+$', error_msg='Invalid project key format.')
+
+def get_valid_issue_type(jira, project_key):
+    try:
+        meta = jira.get(f'issue/createmeta?projectKeys={project_key}')
+        types = meta['projects'][0]['issuetypes']
+        return questionary.select(
+            "Select Issue Type:",
+            choices=[t['name'] for t in types],
+            style=SELECT_MENU_STYLE
+        ).ask()
+    except Exception:
+        return get_validated_input('Enter Issue Type:', error_msg='Invalid issue type.')
+
+def get_valid_user(jira):
+    try:
+        users = jira.search_users("")
+        user_choices = [f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>" for u in users]
+        return questionary.select(
+            "Select User:",
+            choices=user_choices,
+            style=SELECT_MENU_STYLE
+        ).ask()
+    except Exception:
+        return get_validated_input('Enter user email or username:', regex=r'^[^@\s]+@[^@\s]+\.[^@\s]+$', error_msg='Invalid email format.')
+
+def get_valid_field(jira, project_key, issue_type):
+    try:
+        fields = jira.get('field')
+        # Optionally filter by project/issue_type if needed
+        field_names = [f['name'] for f in fields if f.get('name')]
+        return questionary.select(
+            "Select Field:",
+            choices=field_names,
+            style=SELECT_MENU_STYLE
+        ).ask()
+    except Exception:
+        return get_validated_input('Enter field name:', error_msg='Invalid field name.')
+
+def get_valid_transition(jira, issue_key):
+    try:
+        transitions = jira.get(f'issue/{issue_key}/transitions')
+        choices = [t['name'] for t in transitions.get('transitions',[])]
+        return questionary.select(
+            "Select Transition:",
+            choices=choices,
+            style=SELECT_MENU_STYLE
+        ).ask()
+    except Exception:
+        return get_validated_input('Enter transition name:', error_msg='Invalid transition.')
 
 if __name__ == "__main__":
     main() 

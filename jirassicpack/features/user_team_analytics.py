@@ -2,8 +2,8 @@
 # This feature analyzes team workload in Jira by counting issues assigned to each team member in a given timeframe.
 # It prompts for team members, start/end dates, and outputs a Markdown report with workload and bottleneck analysis.
 
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
-from jirassicpack.utils import get_option, validate_required, validate_date, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
+from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive, get_valid_user, get_option
+from jirassicpack.utils import validate_required, validate_date, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
 from datetime import datetime
 from typing import Any, Dict, List
 from colorama import Fore, Style
@@ -13,23 +13,34 @@ import time
 
 logger = logging.getLogger(__name__)
 
-def prompt_user_team_analytics_options(options: Dict[str, Any]) -> Dict[str, Any]:
+def prompt_user_team_analytics_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for user/team analytics options using get_option utility.
-    Prompts for team members (comma-separated), start date, and end date.
-    Returns a dictionary of all options needed for the analysis.
+    Prompt for user/team analytics options using Jira-aware helpers for team member selection.
     """
-    team = get_option(options, 'team', prompt="Team members (comma-separated usernames):", required=True)
-    start_date = get_option(options, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
-    end_date = get_option(options, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
+    team = opts.get('team')
+    if not team and jira:
+        # Allow selecting multiple users
+        users = []
+        while True:
+            usr = get_valid_user(jira)
+            if usr:
+                users.append(usr)
+            add_more = get_option({}, 'add_more', prompt="Add another team member? (y/n)", default='n')
+            if add_more.lower() != 'y':
+                break
+        team = ','.join(users)
+    elif not team:
+        team = get_option(opts, 'team', prompt="Team members (comma-separated usernames):", required=True)
+    start = get_option(opts, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
+    end = get_option(opts, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
+    out_dir = get_option(opts, 'output_dir', default='output')
+    suffix = opts.get('unique_suffix', '')
     return {
         'team': team,
-        'start_date': start_date,
-        'end_date': end_date,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
+        'start_date': start,
+        'end_date': end,
+        'output_dir': out_dir,
+        'unique_suffix': suffix
     }
 
 def write_team_analytics_file(filename: str, start_date: str, end_date: str, workload: Dict[str, int], user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
