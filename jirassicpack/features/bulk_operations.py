@@ -8,6 +8,7 @@ from jirassicpack.utils import get_option, validate_required, error, info, spinn
 from typing import Any, Dict, List, Tuple
 import questionary
 import json
+import time
 
 def prompt_bulk_options(options: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -49,7 +50,7 @@ def write_bulk_report(filename: str, action: str, results: list, user_email=None
         )
         with open(filename, 'w') as f:
             f.write(content)
-        info(f"🦴 Bulk operation report written to {filename}", extra=context)
+        contextual_log('info', f"🦴 Bulk operation report written to {filename}", operation="output_write", output_file=filename, status="success", extra=context)
     except Exception as e:
         error(f"Failed to write bulk operation report: {e}", extra=context)
 
@@ -63,14 +64,16 @@ def write_bulk_report_json(filename: str, action: str, summary: list, user_email
         }
         with open(filename, 'w') as f:
             json.dump(data, f, indent=2)
-        info(f"🦴 Bulk operation JSON report written to {filename}", extra=context)
+        contextual_log('info', f"🦴 Bulk operation JSON report written to {filename}", operation="output_write", output_file=filename, status="success", extra=context)
     except Exception as e:
         error(f"Failed to write bulk operation JSON file: {e}", extra=context)
 
 def bulk_operations(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
-    context = build_context("bulk_operations", user_email, batch_index, unique_suffix)
+    correlation_id = params.get('correlation_id')
+    context = build_context("bulk_operations", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
+    start_time = time.time()
     try:
-        contextual_log('info', f"🦴 [bulk_operations] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", extra=context)
+        contextual_log('info', f"🦴 [bulk_operations] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=params, extra=context)
         # Patch JiraClient for logging
         orig_create_issue = getattr(jira, 'create_issue', None)
         orig_update_issue = getattr(jira, 'update_issue', None)
@@ -91,10 +94,12 @@ def bulk_operations(jira: Any, params: Dict[str, Any], user_email=None, batch_in
         action = params.get('action')
         if not action:
             error("action is required.", extra=context)
+            contextual_log('error', "action is required.", operation="validation", status="error", extra=context)
             return
         jql = params.get('jql')
         if not jql:
             error("jql is required.", extra=context)
+            contextual_log('error', "jql is required.", operation="validation", status="error", extra=context)
             return
         value = params.get('value', '')
         output_dir = params.get('output_dir', 'output')
@@ -154,11 +159,12 @@ def bulk_operations(jira: Any, params: Dict[str, Any], user_email=None, batch_in
         for key, status, err in summary:
             info(f"{key:<15} | {status:<8} | {err}", extra=context)
         info(f"🦴 Bulk operation report written to {filename}", extra=context)
-        contextual_log('info', f"🦴 [bulk_operations] Bulk operation complete | Suffix: {unique_suffix}", extra=context)
+        duration = int((time.time() - start_time) * 1000)
+        contextual_log('info', f"🦴 [bulk_operations] Bulk operation complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=duration, params=params, extra=context)
     except KeyboardInterrupt:
-        contextual_log('warning', "[bulk_operations] Graceful exit via KeyboardInterrupt.", extra=context)
+        contextual_log('warning', "[bulk_operations] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", extra=context)
         info("Graceful exit from Bulk Operations feature.", extra=context)
     except Exception as e:
-        contextual_log('error', f"🦴 [bulk_operations] Exception: {e}", exc_info=True, extra=context)
+        contextual_log('error', f"🦴 [bulk_operations] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", extra=context)
         error(f"🦴 [bulk_operations] Exception: {e}", extra=context)
         raise 

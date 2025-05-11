@@ -9,6 +9,8 @@ import sys
 import logging
 import uuid
 import inspect
+import platform
+import socket
 
 colorama_init(autoreset=True)
 
@@ -37,6 +39,7 @@ def progress_bar(iterable, desc: str = "Processing"):
     Wrap an iterable with a tqdm progress bar.
     Usage: for item in progress_bar(items, desc="Processing issues"):
     """
+    from jirassicpack.cli import logger  # Ensure logger is always defined
     items = list(iterable)
     if len(items) > 50:
         info("🦖 Objects in mirror are closer than they appear.")
@@ -44,11 +47,12 @@ def progress_bar(iterable, desc: str = "Processing"):
     return tqdm(items, desc=desc, ncols=80, colour="green")
 
 # Enhanced error/info output
-def contextual_log(level, msg, extra=None, exc_info=None, params=None, result=None):
+def contextual_log(level, msg, extra=None, exc_info=None, params=None, result=None, operation=None, status=None, error_type=None, correlation_id=None, duration_ms=None, output_file=None, retry_count=None):
     """
     Log with enriched context: feature, user, batch, suffix, function, operation_id, params, result, and exception info.
+    Adds: operation, status, error_type, correlation_id, duration_ms, output_file, retry_count, env, cli_version, hostname, pid.
     """
-    from jirassicpack.cli import logger  # Avoid circular import
+    from jirassicpack.cli import logger, redact_sensitive, CLI_VERSION, HOSTNAME, PID  # Avoid circular import
     frame = inspect.currentframe().f_back
     func_name = frame.f_code.co_name
     operation_id = str(uuid.uuid4())
@@ -56,11 +60,22 @@ def contextual_log(level, msg, extra=None, exc_info=None, params=None, result=No
     context.update({
         'function': func_name,
         'operation_id': operation_id,
+        'operation': operation,
+        'status': status,
+        'error_type': error_type,
+        'correlation_id': correlation_id or context.get('correlation_id'),
+        'duration_ms': duration_ms,
+        'output_file': output_file,
+        'retry_count': retry_count,
+        'env': os.environ.get('JIRASSICPACK_ENV', 'dev'),
+        'cli_version': CLI_VERSION,
+        'hostname': HOSTNAME,
+        'pid': PID,
     })
     if params is not None:
-        context['params'] = params
+        context['params'] = redact_sensitive(params)
     if result is not None:
-        context['result'] = result
+        context['result'] = redact_sensitive(result)
     if level == 'info':
         logger.info(msg, extra=context)
     elif level == 'error':
@@ -69,6 +84,8 @@ def contextual_log(level, msg, extra=None, exc_info=None, params=None, result=No
         logger.warning(msg, extra=context)
     elif level == 'debug':
         logger.debug(msg, extra=context)
+    elif level == 'exception':
+        logger.exception(msg, extra=context, exc_info=exc_info)
     else:
         logger.log(level, msg, extra=context)
 
@@ -93,10 +110,14 @@ def validate_required(value: Any, name: str, prompt: Optional[str] = None) -> An
     If invalid and prompt is provided, re-prompt the user until valid.
     Returns the valid value or None if not interactive.
     """
+    retry_count = 0
     while value is None or (isinstance(value, str) and not value.strip()):
         error(f"{name} is required.")
         if prompt:
             value = questionary.text(prompt).ask()
+            # Enhanced logging for user prompt
+            contextual_log('info', f"User prompted for required value: {name}", operation="user_prompt", status="answered", params={"prompt": prompt, "name": name}, retry_count=retry_count, extra={"feature": "validation"})
+            retry_count += 1
         else:
             return None
     return value
@@ -107,6 +128,7 @@ def validate_date(date_str: str, name: str, prompt: Optional[str] = None) -> Any
     If invalid and prompt is provided, re-prompt the user until valid.
     Returns the valid date string or None if not interactive.
     """
+    retry_count = 0
     while True:
         try:
             datetime.strptime(date_str, "%Y-%m-%d")
@@ -115,6 +137,9 @@ def validate_date(date_str: str, name: str, prompt: Optional[str] = None) -> Any
             error(f"{name} must be in YYYY-MM-DD format.")
             if prompt:
                 date_str = questionary.text(prompt).ask()
+                # Enhanced logging for user prompt
+                contextual_log('info', f"User prompted for date value: {name}", operation="user_prompt", status="answered", params={"prompt": prompt, "name": name}, retry_count=retry_count, extra={"feature": "validation"})
+                retry_count += 1
             else:
                 return None
 
@@ -146,10 +171,13 @@ def get_option(
     if prompt:
         if choices:
             value = questionary.select(prompt, choices=choices, default=default).ask()
+            contextual_log('info', f"User prompted for option: {key}", operation="user_prompt", status="answered", params={"prompt": prompt, "key": key, "choices": choices}, extra={"feature": "get_option"})
         elif password:
             value = questionary.password(prompt).ask()
+            contextual_log('info', f"User prompted for password option: {key}", operation="user_prompt", status="answered", params={"prompt": prompt, "key": key}, extra={"feature": "get_option"})
         else:
             value = questionary.text(prompt, default=default or '').ask()
+            contextual_log('info', f"User prompted for text option: {key}", operation="user_prompt", status="answered", params={"prompt": prompt, "key": key}, extra={"feature": "get_option"})
     if required and not validate_required(value, key):
         return None
     if validate and value and not validate(value, key):
@@ -157,6 +185,11 @@ def get_option(
     return value
 
 def retry_or_skip(action_desc, func, *args, **kwargs):
+    """
+    Retry or skip a function call based on user input.
+    """
+    from jirassicpack.cli import logger  # Ensure logger is always defined
+    retry_count = 0
     while True:
         try:
             result = func(*args, **kwargs)
@@ -167,6 +200,7 @@ def retry_or_skip(action_desc, func, *args, **kwargs):
             return result
         except Exception as e:
             print(DANGER_RED + f"🦖 Error during {action_desc}: {e}" + RESET)
+            contextual_log('warning', f"Error during {action_desc}: {e}", operation="retry_or_skip", error_type=type(e).__name__, retry_count=retry_count, status="error", params={"action_desc": action_desc}, extra={"feature": "retry_or_skip"})
             choice = questionary.select(
                 f"🦖 {action_desc} failed. What would you like to do?",
                 choices=["Retry", "Skip", "Exit"],
@@ -175,7 +209,9 @@ def retry_or_skip(action_desc, func, *args, **kwargs):
                     ("pointer", "fg:#22bb22 bold"),   # Jungle green
                 ])
             ).ask()
+            contextual_log('info', f"User selected retry/skip option: {choice}", operation="retry_or_skip", retry_count=retry_count, status=choice.lower(), params={"action_desc": action_desc}, extra={"feature": "retry_or_skip"})
             if choice == "Retry":
+                retry_count += 1
                 continue
             elif choice == "Skip":
                 info("🦖 Life finds a way! Skipping and continuing...")
@@ -203,6 +239,7 @@ def print_batch_summary(results):
         logger.error("💩 That is one big pile of errors.")
 
 def info_spared_no_expense():
+    from jirassicpack.cli import logger  # Fix for NameError
     info("💸 Spared no expense! Report generated.")
     logger.info("💸 Spared no expense! Report generated.")
 
@@ -212,11 +249,14 @@ def prompt_with_validation(prompt, validate_fn, error_msg, default=None):
     Ensures default is a string (not None) to avoid TypeError in questionary.text().
     """
     default_str = default if default is not None else ""
+    retry_count = 0
     while True:
         value = questionary.text(prompt, default=default_str).ask()
+        contextual_log('info', f"User prompted with validation: {prompt}", operation="user_prompt", status="answered", params={"prompt": prompt}, retry_count=retry_count, extra={"feature": "prompt_with_validation"})
         if validate_fn(value):
             return value
         error(error_msg)
+        retry_count += 1
 
 def safe_get(d, keys, default='N/A'):
     """
@@ -231,11 +271,14 @@ def safe_get(d, keys, default='N/A'):
             return default
     return d
 
-def build_context(feature, user_email, batch_index, unique_suffix):
+def build_context(feature, user_email, batch_index, unique_suffix, correlation_id=None):
     """
     Build a context dict for logging and error/info utilities.
     """
-    return {"feature": feature, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
+    ctx = {"feature": feature, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
+    if correlation_id:
+        ctx["correlation_id"] = correlation_id
+    return ctx
 
 def write_markdown_file(filename, lines, feature, user_email, batch_index, unique_suffix, context=None):
     """
@@ -248,8 +291,10 @@ def write_markdown_file(filename, lines, feature, user_email, batch_index, uniqu
             for line in lines:
                 f.write(line)
         info(f"File written to {filename}", extra=ctx)
+        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=ctx)
     except Exception as e:
         error(f"Failed to write file: {e}. Check if the directory '{filename}' exists and is writable.", extra=ctx)
+        contextual_log('error', f"Failed to write markdown file: {e}", operation="output_write", output_file=filename, status="error", error_type=type(e).__name__, extra=ctx)
 
 def api_error_handler(feature, user_email, batch_index, unique_suffix):
     """

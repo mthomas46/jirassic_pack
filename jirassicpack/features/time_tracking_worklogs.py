@@ -6,6 +6,7 @@ from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_
 from jirassicpack.utils import prompt_with_validation, get_option, validate_required, validate_date, error, info, spinner, info_spared_no_expense, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log
 from datetime import datetime
 from typing import Any, Dict, List
+import time
 
 def prompt_time_tracking_options(options: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -83,47 +84,54 @@ def generate_worklog_summary(issues: List[Dict[str, Any]], start_date: str, end_
     return filtered_issues
 
 def time_tracking_worklogs(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
-    context = build_context("time_tracking_worklogs", user_email, batch_index, unique_suffix)
-    if not require_param(params, 'user', context):
-        return
-    if not require_param(params, 'start_date', context):
-        return
-    if not require_param(params, 'end_date', context):
-        return
-    user = params.get('user')
-    start_date = params.get('start_date')
-    end_date = params.get('end_date')
-    output_dir = params.get('output_dir', 'output')
-    unique_suffix = params.get('unique_suffix', '')
-    ensure_output_dir(output_dir)
-    orig_get = getattr(jira, 'get', None)
-    if orig_get:
-        def log_get(*args, **kwargs):
-            contextual_log('debug', f"Jira GET: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context)
-            resp = orig_get(*args, **kwargs)
-            contextual_log('debug', f"Jira GET response: {resp}", extra=context)
-            return resp
-        jira.get = log_get
-    jql = (
-        f"worklogAuthor = '{user}' "
-        f"AND worklogDate >= '{start_date}' "
-        f"AND worklogDate <= '{end_date}'"
-    )
-    def do_worklogs():
-        with spinner("⏳ Running Time Tracking Worklogs..."):
-            issues = jira.search_issues(jql, fields=["worklog", "key", "summary"], max_results=100)
-            return generate_worklog_summary(issues, start_date, end_date)
+    correlation_id = params.get('correlation_id')
+    context = build_context("time_tracking_worklogs", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
+    start_time = time.time()
     try:
+        contextual_log('info', f"⏳ [time_tracking_worklogs] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=redact_sensitive(params), status="started", extra=context)
+        if not require_param(params, 'user', context):
+            return
+        if not require_param(params, 'start_date', context):
+            return
+        if not require_param(params, 'end_date', context):
+            return
+        user = params.get('user')
+        start_date = params.get('start_date')
+        end_date = params.get('end_date')
+        output_dir = params.get('output_dir', 'output')
+        unique_suffix = params.get('unique_suffix', '')
+        ensure_output_dir(output_dir)
+        orig_get = getattr(jira, 'get', None)
+        if orig_get:
+            def log_get(*args, **kwargs):
+                contextual_log('debug', f"Jira GET: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context)
+                resp = orig_get(*args, **kwargs)
+                contextual_log('debug', f"Jira GET response: {resp}", extra=context)
+                return resp
+            jira.get = log_get
+        jql = (
+            f"worklogAuthor = '{user}' "
+            f"AND worklogDate >= '{start_date}' "
+            f"AND worklogDate <= '{end_date}'"
+        )
+        def do_worklogs():
+            with spinner("⏳ Running Time Tracking Worklogs..."):
+                issues = jira.search_issues(jql, fields=["worklog", "key", "summary"], max_results=100)
+                return generate_worklog_summary(issues, start_date, end_date)
         filtered_issues = retry_or_skip("Generating worklog summary from Jira issues", do_worklogs)
+        if not filtered_issues:
+            info("🦖 See, Nobody Cares. No worklogs found.", extra=context)
+            return
+        filename = f"{output_dir}/worklog_summary{unique_suffix}.md"
+        write_worklog_summary_file(filename, user, start_date, end_date, filtered_issues, user_email, batch_index, unique_suffix, context)
+        celebrate_success()
+        info_spared_no_expense()
+        duration = int((time.time() - start_time) * 1000)
+        contextual_log('info', f"⏳ [time_tracking_worklogs] Feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context)
+    except KeyboardInterrupt:
+        contextual_log('warning', "[time_tracking_worklogs] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context)
+        info("Graceful exit from Time Tracking Worklogs feature.", extra=context)
     except Exception as e:
-        error(f"Failed to fetch worklogs: {e}. Please check your Jira connection, credentials, and network.", extra=context)
-        contextual_log('error', f"[time_tracking_worklogs] Failed to fetch worklogs: {e}", exc_info=True, extra=context)
-        return
-    if not filtered_issues:
-        info("🦖 See, Nobody Cares. No worklogs found.", extra=context)
-        return
-    filename = f"{output_dir}/worklog_summary{unique_suffix}.md"
-    write_worklog_summary_file(filename, user, start_date, end_date, filtered_issues, user_email, batch_index, unique_suffix, context)
-    celebrate_success()
-    info_spared_no_expense()
-    contextual_log('info', f"⏳ [time_tracking_worklogs] Feature complete | Suffix: {unique_suffix}", extra=context) 
+        contextual_log('error', f"[time_tracking_worklogs] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
+        error(f"[time_tracking_worklogs] Exception: {e}", extra=context)
+        raise 

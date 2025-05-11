@@ -13,8 +13,21 @@ import pyfiglet
 from pythonjsonlogger import jsonlogger
 import json
 from dotenv import load_dotenv
+import uuid
+import platform
+import socket
 
 load_dotenv()
+
+"""
+Jirassic Pack CLI Logging:
+- Structured JSON logging by default (plain text optional)
+- Log rotation: 5MB per file, 5 backups
+- Log level configurable via env/CLI (JIRASSICPACK_LOG_LEVEL, --log-level)
+- Sensitive data (API tokens, passwords) always redacted
+- All logs include context: feature, user, batch, suffix, function, operation_id
+- All exceptions logged with tracebacks
+"""
 
 # Set up detailed logging with rotation and redaction
 LOG_FILE = 'jirassicpack.log'
@@ -22,7 +35,7 @@ LOG_LEVEL = os.environ.get('JIRASSICPACK_LOG_LEVEL', 'INFO').upper()
 LOG_FORMAT = os.environ.get('JIRASSICPACK_LOG_FORMAT', 'json').lower()
 handler = RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=5)
 if LOG_FORMAT == 'json':
-    formatter = jsonlogger.JsonFormatter('%(asctime)s %(levelname)s %(name)s %(message)s %(feature)s %(user)s %(batch)s %(suffix)s')
+    formatter = jsonlogger.JsonFormatter('%(asctime)s %(levelname)s %(name)s %(message)s %(feature)s %(user)s %(batch)s %(suffix)s %(function)s %(operation_id)s %(operation)s %(params)s %(status)s %(error_type)s %(correlation_id)s %(duration_ms)s %(output_file)s %(retry_count)s %(env)s %(cli_version)s %(hostname)s %(pid)s')
 else:
     formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
 handler.setFormatter(formatter)
@@ -64,8 +77,6 @@ JIRASSIC_ASCII = r'''
 ||<__.|_|-|_|       <__.|_|-|_|     ||<__.|_|-|_|       <__.|_|-|_|     ||
 ||      |  |   ________   |  |      ||      |  |   ________   |  |      ||
 ||      |  |  |  __  __|  |  |      ||      |  |  |  __  __|  |  |      ||
-||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
-||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
 ||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
 ||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
 ||      |  |  | |  ||  |  |  |      ||      |  |  | |  ||  |  |  |      ||
@@ -191,6 +202,7 @@ def feature_menu():
                 ("pointer", "fg:#ffcc00 bold"),   # Yellow
             ])
         ).ask()
+        contextual_log('info', f"User selected feature group: {group}", operation="user_prompt", status="answered", params={"group": group}, extra={"feature": "cli"})
         if group == "Exit":
             return "exit"
         features = FEATURE_GROUPS[group]
@@ -205,6 +217,7 @@ def feature_menu():
                 ("pointer", "fg:#ffcc00 bold"),
             ])
         ).ask()
+        contextual_log('info', f"User selected feature: {feature}", operation="user_prompt", status="answered", params={"feature": feature}, extra={"feature": "cli"})
         if feature == "return_to_main_menu":
             continue  # Go back to group selection
         return feature
@@ -243,10 +256,13 @@ def main() -> None:
         # Prompt for Jira credentials (shared by all features)
         if not jira_conf['url']:
             jira_conf['url'] = questionary.text("Jira URL:", default=os.environ.get('JIRA_URL', 'https://your-domain.atlassian.net')).ask()
+            contextual_log('info', "User prompted for Jira URL", operation="user_prompt", status="answered", params={"prompt": "Jira URL"}, extra={"feature": "cli"})
         if not jira_conf['email']:
             jira_conf['email'] = questionary.text("Jira Email:", default=os.environ.get('JIRA_EMAIL', '')).ask()
+            contextual_log('info', "User prompted for Jira Email", operation="user_prompt", status="answered", params={"prompt": "Jira Email"}, extra={"feature": "cli"})
         if not jira_conf['api_token']:
-            jira_conf['api_token'] = questionary.password("Jira API Token:").ask()  # No default for security
+            jira_conf['api_token'] = questionary.password("Jira API Token:").ask()
+            contextual_log('info', "User prompted for Jira API Token", operation="user_prompt", status="answered", params={"prompt": "Jira API Token"}, extra={"feature": "cli"})
         with spinner("Connecting to Jira..."):
             contextual_log('info', f"🦖 Connecting to Jira at {jira_conf['url']} as {jira_conf['email']}", extra={"feature": "cli", "user": jira_conf['email'], "batch": None, "suffix": None})
             jira = JiraClient(jira_conf['url'], jira_conf['email'], jira_conf['api_token'])
@@ -254,18 +270,20 @@ def main() -> None:
         # Batch mode: run each feature with merged options
         if features:
             global_options = config.get_options()
-            contextual_log('info', f"🦖 Batch mode: {len(features)} features queued.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+            correlation_id = str(uuid.uuid4())
+            contextual_log('info', f"🦖 Batch mode: {len(features)} features queued. Correlation ID: {correlation_id}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None, "correlation_id": correlation_id})
             for i, feat in enumerate(progress_bar(features, desc="Batch Processing")):
                 name = feat.get('name')
                 feat_options = feat.get('options', {})
                 merged_options = {**global_options, **feat_options}
                 unique_suffix = f"_{int(time.time())}_{i}"
                 merged_options['unique_suffix'] = unique_suffix
+                merged_options['correlation_id'] = correlation_id
                 print(f"\n{WARNING_YELLOW}--- Running feature {i+1}/{len(features)}: {name} ---{RESET}")
-                contextual_log('info', f"🦖 Running feature: {name} | Options: {redact_sensitive(merged_options)} | Batch index: {i} | Suffix: {unique_suffix}", extra={"feature": name, "user": None, "batch": i, "suffix": unique_suffix})
+                contextual_log('info', f"🦖 Running feature: {name} | Options: {redact_sensitive(merged_options)} | Batch index: {i} | Suffix: {unique_suffix} | Correlation ID: {correlation_id}", extra={"feature": name, "user": None, "batch": i, "suffix": unique_suffix, "correlation_id": correlation_id})
                 run_feature(name, jira, merged_options, user_email=jira_conf.get('email'), batch_index=i, unique_suffix=unique_suffix)
-            contextual_log('info', "🦖 Batch run complete!", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
-            contextual_log('info', "🦖 Welcome to Jurassic Park.", extra={"feature": "cli", "user": jira_conf.get('email'), "batch": None, "suffix": None})
+            contextual_log('info', "🦖 Batch run complete!", extra={"feature": "cli", "user": None, "batch": None, "suffix": None, "correlation_id": correlation_id})
+            contextual_log('info', "🦖 Welcome to Jurassic Park.", extra={"feature": "cli", "user": jira_conf.get('email'), "batch": None, "suffix": None, "correlation_id": correlation_id})
             info("🦖 Welcome to Jurassic Park.")
             return
         # Single feature mode
@@ -437,8 +455,11 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
     else:
         params = options
     # Now call the feature handler (which should only perform the operation, with spinner inside if needed)
+    start_time = time.time()
+    contextual_log('info', f"Feature '{key}' execution started.", operation="feature_start", params=options, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
     FEATURE_REGISTRY[key](jira, params, user_email=user_email, batch_index=batch_index, unique_suffix=unique_suffix)
-    contextual_log('info', f"{feature_tag} Feature '{key}' complete.", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+    duration = int((time.time() - start_time) * 1000)
+    contextual_log('info', f"Feature '{key}' execution finished.", operation="feature_end", status="success", duration_ms=duration, params=options, extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
     contextual_log('info', f"{feature_tag} Feature '{key}' complete. {context}", extra={"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix})
 
 def test_connection(jira: JiraClient, options: dict = None, context: str = "") -> None:
@@ -478,6 +499,7 @@ def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -
                 print(f"{JUNGLE_GREEN}🦖 User list written to {filename}{RESET}")
                 contextual_log('info', "🦖 Objects in mirror are closer than they appear.", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
                 info("🦖 Objects in mirror are closer than they appear.")
+                contextual_log('info', f"Writing user list to {filename}", operation="output_write", output_file=filename, status="success", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
             except Exception as file_err:
                 error(f"🦖 Failed to write user list to file: {file_err}", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
                 contextual_log('error', f"[output_all_users] File write error: {file_err}", exc_info=True, extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
@@ -539,6 +561,11 @@ def retry_or_skip(action_desc, func, *args, **kwargs):
 
 def pretty_print_result(result):
     print("\n" + WARNING_YELLOW + json.dumps(result, indent=2) + RESET)
+
+# --- Enhanced Logging Context ---
+CLI_VERSION = "1.0.0"  # Update as needed
+HOSTNAME = socket.gethostname()
+PID = os.getpid()
 
 if __name__ == "__main__":
     main() 

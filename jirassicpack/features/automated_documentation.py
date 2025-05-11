@@ -55,7 +55,7 @@ def write_automated_doc_file(filename: str, doc_type: str, issues: list, user_em
         )
         with open(filename, 'w') as f:
             f.write(content)
-        info(f"📄 Automated documentation written to {filename}", extra=context)
+        contextual_log('info', f"📄 Automated documentation written to {filename}", operation="output_write", output_file=filename, status="success", extra=context)
     except Exception as e:
         error(f"Failed to write automated documentation file: {e}", extra=context)
 
@@ -67,39 +67,51 @@ def generate_documentation(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return issues
 
 def automated_documentation(jira: Any, params: dict, user_email=None, batch_index=None, unique_suffix=None) -> None:
-    context = build_context("automated_documentation", user_email, batch_index, unique_suffix)
-    if not require_param(params, 'doc_type', context):
-        return
-    if not require_param(params, 'project', context):
-        return
-    output_dir = params.get('output_dir', 'output')
-    unique_suffix = params.get('unique_suffix', '')
-    doc_type = params.get('doc_type')
-    project = params.get('project')
-    version = params.get('version', '')
-    sprint = params.get('sprint', '')
-    ensure_output_dir(output_dir)
-    if doc_type == 'Release notes' and version:
-        jql = f'project = "{project}" AND fixVersion = "{version}" AND statusCategory = Done'
-    elif doc_type == 'Sprint Review' and sprint:
-        jql = f'project = "{project}" AND Sprint = "{sprint}" AND statusCategory = Done'
-    else:
-        jql = f'project = "{project}" AND statusCategory = Done'
-    def do_search():
-        with spinner("📄 Running Automated Documentation..."):
-            return jira.search_issues(jql, fields=["key", "summary"], max_results=100)
+    import time
+    correlation_id = params.get('correlation_id')
+    context = build_context("automated_documentation", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
+    start_time = time.time()
     try:
-        issues = retry_or_skip("Fetching issues for documentation", do_search)
+        contextual_log('info', f"📄 [automated_documentation] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=redact_sensitive(params), status="started", extra=context)
+        if not require_param(params, 'doc_type', context):
+            return
+        if not require_param(params, 'project', context):
+            return
+        output_dir = params.get('output_dir', 'output')
+        unique_suffix = params.get('unique_suffix', '')
+        doc_type = params.get('doc_type')
+        project = params.get('project')
+        version = params.get('version', '')
+        sprint = params.get('sprint', '')
+        ensure_output_dir(output_dir)
+        if doc_type == 'Release notes' and version:
+            jql = f'project = "{project}" AND fixVersion = "{version}" AND statusCategory = Done'
+        elif doc_type == 'Sprint Review' and sprint:
+            jql = f'project = "{project}" AND Sprint = "{sprint}" AND statusCategory = Done'
+        else:
+            jql = f'project = "{project}" AND statusCategory = Done'
+        def do_search():
+            with spinner("📄 Running Automated Documentation..."):
+                return jira.search_issues(jql, fields=["key", "summary"], max_results=100)
+        try:
+            issues = retry_or_skip("Fetching issues for documentation", do_search)
+        except Exception as e:
+            error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
+            contextual_log('error', f"[automated_documentation] Failed to fetch issues: {e}", exc_info=True, extra=context)
+            return
+        if not issues:
+            info("🦖 See, Nobody Cares. No issues found for documentation.", extra=context)
+            return
+        filename = f"{output_dir}/automated_doc{unique_suffix}.md"
+        write_automated_doc_file(filename, doc_type, issues, user_email, batch_index, unique_suffix, context)
+        celebrate_success()
+        info_spared_no_expense()
+        contextual_log('info', f"📄 Automated documentation written to {filename}", operation="output_write", output_file=filename, status="success", extra=context)
+        contextual_log('info', f"📄 Automated documentation feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=int((time.time() - start_time) * 1000), params=redact_sensitive(params), extra=context)
+    except KeyboardInterrupt:
+        contextual_log('warning', "[automated_documentation] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context)
+        info("Graceful exit from Automated Documentation feature.", extra=context)
     except Exception as e:
-        error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
-        contextual_log('error', f"[automated_documentation] Failed to fetch issues: {e}", exc_info=True, extra=context)
-        return
-    if not issues:
-        info("🦖 See, Nobody Cares. No issues found for documentation.", extra=context)
-        return
-    filename = f"{output_dir}/automated_doc{unique_suffix}.md"
-    write_automated_doc_file(filename, doc_type, issues, user_email, batch_index, unique_suffix, context)
-    celebrate_success()
-    info_spared_no_expense()
-    info(f"📄 Automated documentation written to {filename}", extra=context)
-    contextual_log('info', f"📄 Automated documentation feature complete | Suffix: {unique_suffix}", extra=context) 
+        contextual_log('error', f"[automated_documentation] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
+        error(f"[automated_documentation] Exception: {e}", extra=context)
+        raise 

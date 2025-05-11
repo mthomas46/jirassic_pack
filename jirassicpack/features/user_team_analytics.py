@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from colorama import Fore, Style
 from statistics import mean, median
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,9 @@ def write_team_analytics_file(filename: str, start_date: str, end_date: str, wor
                 min_user = min(workload, key=workload.get)
                 f.write(f"\n**Most loaded:** {max_user} ({workload[max_user]} issues)\n")
                 f.write(f"**Least loaded:** {min_user} ({workload[min_user]} issues)\n")
-        info(f"🦖 Team analytics written to {filename}", extra=context)
+        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context)
     except Exception as e:
+        contextual_log('error', f"Failed to write team analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context)
         error(f"Failed to write team analytics file: {e}", extra=context)
 
 def generate_analytics(issues: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -76,14 +78,17 @@ def write_analytics_file(filename: str, analytics: Dict[str, int], user_email=No
                 min_user = min(analytics, key=analytics.get)
                 f.write(f"\n**Most loaded:** {max_user} ({analytics[max_user]} issues)\n")
                 f.write(f"**Least loaded:** {min_user} ({analytics[min_user]} issues)\n")
-        info(f"🧬 User/team analytics written to {filename}", extra=context)
+        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context)
     except Exception as e:
+        contextual_log('error', f"Failed to write analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context)
         error(f"Failed to write analytics file: {e}", extra=context)
 
 def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
-    context = build_context("user_team_analytics", user_email, batch_index, unique_suffix)
+    correlation_id = params.get('correlation_id')
+    context = build_context("user_team_analytics", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
+    start_time = time.time()
     try:
-        contextual_log('info', f"🧬 User/team analytics entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", extra=context)
+        contextual_log('info', f"🧬 [user_team_analytics] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=redact_sensitive(params), status="started", extra=context)
         orig_search_issues = getattr(jira, 'search_issues', None)
         if orig_search_issues:
             def log_search_issues(*args, **kwargs):
@@ -363,18 +368,21 @@ def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batc
             )
             with open(filename, 'w') as f:
                 f.write(content)
+            contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context)
             info(f"🧬 User/team analytics written to {filename}", extra=context)
-            contextual_log('info', f"🧬 [user_team_analytics] Feature complete | Suffix: {unique_suffix}", extra=context)
+            duration = int((time.time() - start_time) * 1000)
+            contextual_log('info', f"🧬 [user_team_analytics] Feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context)
         except Exception as e:
+            contextual_log('error', f"Failed to write analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context)
             error(f"Failed to write analytics file: {e}", extra=context)
-            contextual_log('error', f"[user_team_analytics] Failed to write analytics file: {e}", exc_info=True, extra=context)
+            contextual_log('error', f"[user_team_analytics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", extra=context)
         celebrate_success()
         info_spared_no_expense()
         info(f"🧬 User/team analytics written to {filename}", extra=context)
     except KeyboardInterrupt:
-        logger.warning("[user_team_analytics] Graceful exit via KeyboardInterrupt.", extra=context)
+        contextual_log('warning', "[user_team_analytics] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context)
         info("Graceful exit from User & Team Analytics feature.", extra=context)
     except Exception as e:
-        logger.exception(f"[user_team_analytics] Exception: {e}", extra=context)
+        contextual_log('error', f"[user_team_analytics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
         error(f"[user_team_analytics] Exception: {e}", extra=context)
         raise 

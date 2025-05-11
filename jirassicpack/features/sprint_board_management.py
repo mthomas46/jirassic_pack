@@ -5,6 +5,7 @@
 from typing import Any, Dict, List
 from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive
 from jirassicpack.utils import get_option, validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log
+import time
 
 def prompt_sprint_board_management_options(options: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -62,9 +63,11 @@ def generate_sprint_summary(sprint: Any) -> Dict[str, Any]:
     }
 
 def sprint_board_management(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
-    context = build_context("sprint_board_management", user_email, batch_index, unique_suffix)
+    correlation_id = params.get('correlation_id')
+    context = build_context("sprint_board_management", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
+    start_time = time.time()
     try:
-        contextual_log('info', f"[sprint_board_management] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", extra=context)
+        contextual_log('info', f"🌋 [sprint_board_management] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=redact_sensitive(params), status="started", extra=context)
         # Patch JiraClient for logging
         orig_get = getattr(jira, 'get', None)
         if orig_get:
@@ -111,11 +114,12 @@ def sprint_board_management(jira: Any, params: Dict[str, Any], user_email=None, 
         celebrate_success()
         info_spared_no_expense()
         info(f"🌋 Sprint/Board summary written to {filename}", extra=context)
-        contextual_log('info', f"[sprint_board_management] Feature complete | Suffix: {unique_suffix}", extra=context)
+        duration = int((time.time() - start_time) * 1000)
+        contextual_log('info', f"🌋 [sprint_board_management] Feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context)
     except KeyboardInterrupt:
-        contextual_log('warning', "[sprint_board_management] Graceful exit via KeyboardInterrupt.", extra=context)
+        contextual_log('warning', "[sprint_board_management] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context)
         info("Graceful exit from Sprint Board Management feature.", extra=context)
     except Exception as e:
-        contextual_log('error', f"[sprint_board_management] Exception: {e}", exc_info=True, extra=context)
+        contextual_log('error', f"[sprint_board_management] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
         error(f"[sprint_board_management] Exception: {e}", extra=context)
         raise 
