@@ -3,9 +3,18 @@ import questionary
 from jirassicpack.cli import ensure_output_dir
 from datetime import datetime
 from jirassicpack.utils import get_option, validate_required, validate_date, spinner, error, info, safe_get, build_context, write_markdown_file, require_param, render_markdown_report
+from jirassicpack.features.time_tracking_worklogs import select_jira_user
 
-def prompt_summarize_tickets_options(options):
-    username = get_option(options, 'user', prompt="Jira Username for summary:", default=os.environ.get('JIRA_USER', ''), required=True)
+def prompt_summarize_tickets_options(options, jira=None):
+    username = options.get('user')
+    if not username and jira:
+        info("Please select a Jira user for ticket summarization.")
+        username = select_jira_user(jira)
+        if not username:
+            info("Aborted user selection for ticket summarization.")
+            return None
+    elif not username:
+        username = get_option(options, 'user', prompt="Jira Username for summary:", required=True)
     start_date = get_option(options, 'start_date', prompt="Start date (YYYY-MM-DD):", default=os.environ.get('JIRA_START_DATE', '2024-01-01'), required=True, validate=validate_date)
     end_date = get_option(options, 'end_date', prompt="End date (YYYY-MM-DD):", default=os.environ.get('JIRA_END_DATE', '2024-01-31'), required=True, validate=validate_date)
     output_dir = get_option(options, 'output_dir', default=os.environ.get('JIRA_OUTPUT_DIR', 'output'))
@@ -73,13 +82,15 @@ def summarize_tickets(jira, params, user_email=None, batch_index=None, unique_su
                 lines.append(f"- {author}: {body}\n")
         lines.append("\n---\n\n")
     filename = f"{output_dir}/{username}_{start_date}_to_{end_date}_summary{unique_suffix}.md"
+    main_content_section = "\n".join(lines)
     content = render_markdown_report(
         feature="summarize_tickets",
         user=user_email,
         batch=batch_index,
         suffix=unique_suffix,
         feature_title="Ticket Summarization",
-        summary_section="**Total tickets summarized:** {{total}}\n\n**Highlights:** ..."
+        summary_section="**Total tickets summarized:** {{total}}\n\n**Highlights:** ...",
+        main_content_section=main_content_section
     )
     with open(filename, 'w') as f:
         f.write(content)

@@ -10,23 +10,102 @@ from colorama import Fore, Style
 from statistics import mean, median
 import logging
 import time
+import questionary
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache for Jira users
+_CACHED_JIRA_USERS = None
+
 def prompt_user_team_analytics_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for user/team analytics options using Jira-aware helpers for team member selection.
+    Prompt for user/team analytics options, always prompting for team member selection (no default to current user).
     """
+    global _CACHED_JIRA_USERS
     team = opts.get('team')
+    users = []
     if not team and jira:
-        # Allow selecting multiple users
-        users = []
+        # --- Fetch all users with pagination, but only once ---
+        if _CACHED_JIRA_USERS is None:
+            all_jira_users = []
+            start_at = 0
+            max_results = 1000
+            while True:
+                batch = jira.search_users("", start_at=start_at, max_results=max_results)
+                if not batch:
+                    break
+                all_jira_users.extend(batch)
+                if len(batch) < max_results:
+                    break
+                start_at += max_results
+            _CACHED_JIRA_USERS = all_jira_users
+        else:
+            all_jira_users = _CACHED_JIRA_USERS
+        filtered_users = [u for u in all_jira_users if u.get('emailAddress')]
+        user_choices = sorted([
+            f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>"
+            for u in filtered_users
+        ])
+        # --- Submenu for team member selection ---
+        info("Please select Jira team members for analytics.")
         while True:
-            usr = get_valid_user(jira)
-            if usr:
-                users.append(usr)
-            add_more = get_option({}, 'add_more', prompt="Add another team member? (y/n)", default='n')
-            if add_more.lower() != 'y':
+            if users:
+                info(f"Currently selected team members:\n- " + "\n- ".join(users))
+            method = questionary.select(
+                "How would you like to add a team member?",
+                choices=[
+                    "Search for a user",
+                    "Pick from list",
+                    "Use current user",
+                    "Clear selected members",
+                    "Done",
+                    "Abort"
+                ],
+                default="Pick from list"
+            ).ask()
+            if method == "Search for a user":
+                search_term = questionary.text("Enter name or email to search:").ask()
+                matches = [
+                    f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>"
+                    for u in filtered_users
+                    if search_term.lower() in (u.get('displayName','').lower() + u.get('emailAddress','').lower())
+                ]
+                if not matches:
+                    info("No users found matching your search.")
+                    continue
+                picked = questionary.select("Select a team member:", choices=matches + ["(Cancel)", "(Abort)"]).ask()
+                if picked == "(Cancel)":
+                    continue
+                if picked == "(Abort)":
+                    info("Aborted team member selection.")
+                    return None
+                if picked and picked not in users:
+                    users.append(picked)
+            elif method == "Pick from list":
+                picked = questionary.select("Select a team member:", choices=user_choices + ["(Done)", "(Abort)"]).ask()
+                if picked == "(Done)":
+                    break
+                if picked == "(Abort)":
+                    info("Aborted team member selection.")
+                    return None
+                if picked and picked not in users:
+                    users.append(picked)
+            elif method == "Use current user":
+                try:
+                    me = jira.get_current_user()
+                    current_user = f"{me.get('displayName','?')} <{me.get('emailAddress','?')}>"
+                    if current_user not in users:
+                        users.append(current_user)
+                    info(f"Added current user: {current_user}")
+                except Exception:
+                    info("Could not retrieve current user from Jira.")
+            elif method == "Clear selected members":
+                users.clear()
+                info("Cleared all selected team members.")
+            elif method == "Abort":
+                info("Aborted team member selection.")
+                return None
+            else:  # Done
                 break
         team = ','.join(users)
     elif not team:

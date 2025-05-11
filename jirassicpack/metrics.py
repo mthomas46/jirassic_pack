@@ -3,9 +3,21 @@ import os
 import questionary
 from jirassicpack.cli import ensure_output_dir
 from jirassicpack.utils import get_option, validate_required, validate_date, spinner, error, info, safe_get, build_context, write_markdown_file, require_param, render_markdown_report
+from jirassicpack.features.time_tracking_worklogs import select_jira_user
 
-def prompt_gather_metrics_options(options):
-    username = get_option(options, 'user', prompt="Jira Username for metrics:", default=os.environ.get('JIRA_USER', ''), required=True)
+def prompt_gather_metrics_options(options, jira=None):
+    """
+    Prompt for metrics options, always prompting for user selection (no default to current user).
+    """
+    username = options.get('user')
+    if not username and jira:
+        info("Please select a Jira user for metrics gathering.")
+        username = select_jira_user(jira)
+        if not username:
+            info("Aborted user selection for metrics gathering.")
+            return None
+    elif not username:
+        username = get_option(options, 'user', prompt="Jira Username for metrics:", required=True)
     start_date = get_option(options, 'start_date', prompt="Start date (YYYY-MM-DD):", default=os.environ.get('JIRA_START_DATE', '2024-01-01'), required=True, validate=validate_date)
     end_date = get_option(options, 'end_date', prompt="End date (YYYY-MM-DD):", default=os.environ.get('JIRA_END_DATE', '2024-01-31'), required=True, validate=validate_date)
     output_dir = get_option(options, 'output_dir', default=os.environ.get('JIRA_OUTPUT_DIR', 'output'))

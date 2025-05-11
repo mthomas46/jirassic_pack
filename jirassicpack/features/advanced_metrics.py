@@ -4,22 +4,30 @@
 
 from datetime import datetime
 from jirassicpack.cli import ensure_output_dir
-from jirassicpack.utils import get_option, validate_required, validate_date, error, spinner, safe_get, build_context, write_markdown_file, require_param, info, render_markdown_report, redact_sensitive
+from jirassicpack.utils import get_option, validate_required, validate_date, error, spinner, safe_get, build_context, write_markdown_file, require_param, info, render_markdown_report, redact_sensitive, contextual_log
 from typing import Any, Dict, List, Tuple
 from statistics import mean, median
 from collections import defaultdict, Counter
 import logging
 import time
+import questionary
+from jirassicpack.features.time_tracking_worklogs import select_jira_user
 
 logger = logging.getLogger(__name__)
 
-def prompt_advanced_metrics_options(options: Dict[str, Any]) -> Dict[str, Any]:
+def prompt_advanced_metrics_options(options: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for advanced metrics options using get_option utility.
-    Prompts for user, start date, and end date.
-    Returns a dictionary of all options needed for the metrics calculation.
+    Prompt for advanced metrics options, always prompting for user selection (no default to current user).
     """
-    user = get_option(options, 'user', prompt="Jira Username for metrics:", required=True)
+    user = options.get('user')
+    if not user and jira:
+        info("Please select a Jira user for advanced metrics.")
+        user = select_jira_user(jira)
+        if not user:
+            info("Aborted user selection for advanced metrics.")
+            return None
+    elif not user:
+        user = get_option(options, 'user', prompt="Jira Username for metrics:", required=True)
     start_date = get_option(options, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
     end_date = get_option(options, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
     output_dir = get_option(options, 'output_dir', default='output')
