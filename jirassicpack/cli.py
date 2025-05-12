@@ -7,7 +7,9 @@ from jirassicpack.config import ConfigLoader
 from jirassicpack.jira_client import JiraClient
 import questionary
 from typing import Any, Dict
-from jirassicpack.utils import error, info, spinner, progress_bar, contextual_log
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, error, info
+from jirassicpack.utils.logging import contextual_log, redact_sensitive
+from jirassicpack.utils.jira import select_jira_user, get_valid_project_key, get_valid_issue_type, get_valid_user, get_valid_field, get_valid_transition, select_account_id, select_property_key, search_issues
 from colorama import Fore, Style
 import pyfiglet
 from pythonjsonlogger import jsonlogger
@@ -19,8 +21,6 @@ import socket
 from datetime import datetime
 import re
 import inspect
-from jirassicpack.features.time_tracking_worklogs import select_jira_user
-from jirassicpack.utils_shared import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, redact_sensitive
 
 load_dotenv()
 

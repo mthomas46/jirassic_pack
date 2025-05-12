@@ -1,9 +1,8 @@
 import os
 import sys
 import questionary
-import re
 from colorama import Fore, Style
-from jirassicpack.utils import info, contextual_log
+from typing import Optional
 
 JUNGLE_GREEN = '\033[38;5;34m'
 WARNING_YELLOW = '\033[38;5;226m'
@@ -48,7 +47,7 @@ def ensure_output_dir(directory: str) -> None:
     if directory and not os.path.exists(directory):
         os.makedirs(directory)
 
-def print_section_header(title: str, feature_key: str = None):
+def print_section_header(title: str, feature_key: Optional[str] = None) -> None:
     """
     Print a section header with per-feature ASCII art and color theme.
     """
@@ -63,10 +62,16 @@ def print_section_header(title: str, feature_key: str = None):
     print(color + header + RESET)
     print(f"[Section: {title}]")  # For screen readers
 
-def celebrate_success():
+def celebrate_success() -> None:
+    """
+    Print a celebratory success message.
+    """
     print(JUNGLE_GREEN + "🎉 Success! 🎉" + RESET)
 
-def retry_or_skip(action_desc, func, *args, **kwargs):
+def retry_or_skip(action_desc: str, func, *args, **kwargs):
+    """
+    Retry a function on failure, or allow the user to skip or exit.
+    """
     while True:
         try:
             return func(*args, **kwargs)
@@ -85,16 +90,4 @@ def retry_or_skip(action_desc, func, *args, **kwargs):
             elif choice == "Skip":
                 return None
             else:
-                sys.exit(1)
-
-def redact_sensitive(options):
-    """
-    Redact sensitive fields in options dict for logging/output.
-    """
-    if not isinstance(options, dict):
-        return options
-    redacted = options.copy()
-    for k in redacted:
-        if any(s in k.lower() for s in ["token", "password", "secret", "api_key"]):
-            redacted[k] = "***REDACTED***"
-    return redacted 
+                sys.exit(1) 

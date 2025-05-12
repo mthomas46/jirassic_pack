@@ -1,9 +1,10 @@
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info, get_option, error
+from jirassicpack.utils.logging import contextual_log
+from jirassicpack.utils.jira import select_jira_user
+from jirassicpack.utils.io import validate_date
 import os
 import logging
 import questionary
-from jirassicpack.utils import get_option, validate_date, info, error, contextual_log
-from jirassicpack.features.time_tracking_worklogs import select_jira_user
-from jirassicpack.utils_shared import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, redact_sensitive
 
 def prompt_gather_metrics_options(options, jira=None):
     """

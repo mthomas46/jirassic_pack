@@ -2,8 +2,9 @@
 # This feature summarizes worklogs for a given Jira user and timeframe.
 # It prompts for user, start/end dates, fetches issues with worklogs, and outputs a Markdown report with worklog details per issue.
 
-from jirassicpack.utils_shared import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, redact_sensitive
-from jirassicpack.utils import prompt_with_validation, validate_required, validate_date, error, info, spinner, info_spared_no_expense, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log, get_option
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info, prompt_with_validation, validate_required, validate_date, error, spinner, info_spared_no_expense, safe_get, write_markdown_file, require_param, render_markdown_report, get_option
+from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
+from jirassicpack.utils.jira import select_jira_user, get_valid_project_key, get_valid_issue_type, get_valid_user, get_valid_field, get_valid_transition, select_account_id, select_property_key, search_issues
 from datetime import datetime
 from typing import Any, Dict, List
 import time

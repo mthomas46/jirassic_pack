@@ -3,8 +3,10 @@
 # It prompts for the board name, fetches board/sprint/issue data, and outputs a Markdown report for review or sharing.
 
 from typing import Any, Dict, List
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger
-from jirassicpack.utils import error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, redact_sensitive, get_option, select_board_name, select_sprint_name, contextual_log
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, info, get_option
+from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
+from jirassicpack.utils.io import error, render_markdown_report
+from jirassicpack.utils.jira import select_board_name, select_sprint_name
 import time
 
 def prompt_sprint_board_management_options(options: Dict[str, Any], jira=None) -> Dict[str, Any]:

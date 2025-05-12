@@ -3,13 +3,14 @@
 # It prompts the user for the desired action, the JQL to select issues, and the value for the action (if needed).
 # Results are written to a Markdown report for traceability.
 
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, print_batch_summary, logger, get_valid_transition, get_valid_user
-from jirassicpack.utils import validate_required, error, info, spinner, progress_bar, BULK_ACTIONS, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log, redact_sensitive, get_option
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, info_spared_no_expense, prompt_with_validation, info
+from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
+from jirassicpack.utils.jira import select_jira_user, get_valid_transition
+from jirassicpack.utils.io import validate_required, error, render_markdown_report, get_option
 from typing import Any, Dict, List, Tuple
 import questionary
 import json
 import time
-from jirassicpack.features.time_tracking_worklogs import select_jira_user
 
 def prompt_bulk_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """

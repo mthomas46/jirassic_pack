@@ -3,15 +3,16 @@
 # It prompts for user, start/end dates, fetches completed issues, and outputs a Markdown report with a metrics table.
 
 from datetime import datetime
-from jirassicpack.cli import ensure_output_dir
-from jirassicpack.utils import get_option, validate_required, validate_date, error, spinner, safe_get, build_context, write_markdown_file, require_param, info, render_markdown_report, redact_sensitive, contextual_log
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info, write_markdown_file
+from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
+from jirassicpack.utils.jira import select_jira_user
+from jirassicpack.utils.io import get_option, validate_required, validate_date, error, safe_get, require_param, render_markdown_report
 from typing import Any, Dict, List, Tuple
 from statistics import mean, median
 from collections import defaultdict, Counter
 import logging
 import time
 import questionary
-from jirassicpack.features.time_tracking_worklogs import select_jira_user
 
 logger = logging.getLogger(__name__)
 

@@ -2,8 +2,10 @@
 # This feature allows users to create a new Jira issue by prompting for project, summary, description, and issue type.
 # It writes the created issue's key and summary to a Markdown file for record-keeping.
 
-from jirassicpack.utils_shared import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip
-from jirassicpack.utils import validate_required, error, info, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, contextual_log, redact_sensitive, get_option
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, info, get_option
+from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
+from jirassicpack.utils.jira import get_valid_project_key, get_valid_issue_type
+from jirassicpack.utils.io import validate_required, error, render_markdown_report
 from typing import Any, Dict
 import logging
 import json

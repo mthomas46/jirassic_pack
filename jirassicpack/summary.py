@@ -1,9 +1,9 @@
 import os
 import questionary
-from jirassicpack.cli import ensure_output_dir
-from datetime import datetime
-from jirassicpack.utils import get_option, validate_required, validate_date, spinner, error, info, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, redact_sensitive, contextual_log
+from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_required, validate_date, safe_get, write_markdown_file, require_param, render_markdown_report
+from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.features.time_tracking_worklogs import select_jira_user
+from datetime import datetime
 import time
 
 def prompt_summarize_tickets_options(options, jira=None):

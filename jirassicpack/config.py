@@ -1,6 +1,6 @@
 import os
 import yaml
-from jirassicpack.utils import redact_sensitive, contextual_log
+from jirassicpack.utils.logging import redact_sensitive, contextual_log
 
 class ConfigLoader:
     """
