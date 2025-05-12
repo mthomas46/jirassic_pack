@@ -2,6 +2,9 @@ import os
 from jirassicpack.features.ticket_discussion_summary import call_local_llm_text, call_local_llm_file, call_local_llm_github_pr
 from jirassicpack.utils.io import prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
 import requests
+from jirassicpack.config import ConfigLoader
+
+llm_config = ConfigLoader().get_llm_config()
 
 def test_local_llm(params=None, user_email=None, batch_index=None, unique_suffix=None):
     """
@@ -39,9 +42,13 @@ def test_local_llm(params=None, user_email=None, batch_index=None, unique_suffix
             print("🦖 Invalid file path. Aborting.")
             return
         try:
-            response = call_local_llm_file(file_path)
+            url = llm_config['file_url']
+            with open(file_path, "rb") as f:
+                files = {"file": (file_path, f)}
+                response = requests.post(url, files=files)
+            response.raise_for_status()
             print("\n--- LLM Response ---\n")
-            print(response)
+            print(response.json()["response"])
         except Exception as e:
             print(f"🦖 Error calling local LLM: {e}")
     elif method == "Test GitHub PR endpoint":
@@ -66,7 +73,7 @@ def test_local_llm(params=None, user_email=None, batch_index=None, unique_suffix
             print(f"🦖 Error calling local LLM GitHub PR endpoint: {e}")
     elif method == "Check health":
         try:
-            resp = requests.get("http://localhost:5000/health")
+            resp = requests.get(llm_config['health_url'])
             resp.raise_for_status()
             data = resp.json()
             print("\n--- LLM Health ---\n")

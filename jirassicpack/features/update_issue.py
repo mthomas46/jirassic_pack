@@ -11,29 +11,45 @@ from typing import Any, Dict
 import logging
 import json
 import time
+from marshmallow import Schema, fields, ValidationError, pre_load
+from jirassicpack.utils.rich_prompt import rich_error
+import re
+from jirassicpack.utils.fields import IssueKeyField, BaseOptionsSchema, validate_nonempty
+from marshmallow import validate
+
+class UpdateIssueOptionsSchema(BaseOptionsSchema):
+    issue_key = IssueKeyField(required=True, error_messages={"required": "Issue key is required."})
+    field = fields.Str(required=True, error_messages={"required": "Field is required."}, validate=validate_nonempty)
+    value = fields.Str(required=True, error_messages={"required": "Value is required."}, validate=validate_nonempty)
+    # output_dir and unique_suffix are inherited
 
 def prompt_update_issue_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
     Prompt for update issue options using Jira-aware helpers for field selection.
     """
-    key = get_option(opts, 'issue_key', prompt="🦕 Jira Issue Key:")
-    fld = opts.get('field')
-    proj = opts.get('project')
-    itype = opts.get('issue_type')
-    if not fld and jira and proj and itype:
-        fld = get_valid_field(jira, proj, itype)
-    elif not fld:
-        fld = get_option(opts, 'field', prompt="🦕 Field to update (e.g., summary, description, status):")
-    val = get_option(opts, 'value', prompt="🦕 New value:")
-    out_dir = get_option(opts, 'output_dir', default='output')
-    suffix = opts.get('unique_suffix', '')
-    return {
-        'issue_key': key,
-        'field': fld,
-        'value': val,
-        'output_dir': out_dir,
-        'unique_suffix': suffix
-    }
+    schema = UpdateIssueOptionsSchema()
+    data = dict(opts)
+    while True:
+        try:
+            validated = schema.load(data)
+            return validated
+        except ValidationError as err:
+            for field, msgs in err.messages.items():
+                suggestion = None
+                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
+                    message, suggestion = msgs[0]
+                elif isinstance(msgs, list) and msgs:
+                    message = msgs[0]
+                else:
+                    message = str(msgs)
+                if field == 'issue_key':
+                    data['issue_key'] = get_option(data, 'issue_key', prompt="🦕 Jira Issue Key:", required=True)
+                elif field == 'field' and jira and data.get('project') and data.get('issue_type'):
+                    data['field'] = get_valid_field(jira, data['project'], data['issue_type'])
+                else:
+                    data[field] = get_option(data, field, prompt=f"🦕 {field.replace('_', ' ').title()}: ", required=True)
+                rich_error(f"Input validation error for '{field}': {message}", suggestion)
+            continue
 
 def write_update_issue_file(filename: str, issue_key: str, field: str, value: str, user_email=None, batch_index=None, unique_suffix=None, context=None, result=None) -> None:
     try:

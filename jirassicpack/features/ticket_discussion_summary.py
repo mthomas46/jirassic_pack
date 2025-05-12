@@ -1,5 +1,5 @@
 import os
-from jirassicpack.utils.io import ensure_output_dir, info, error, spinner, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
+from jirassicpack.utils.io import ensure_output_dir, info, error, spinner, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, render_markdown_report_template
 from jirassicpack.utils.logging import contextual_log
 from jirassicpack.utils.io import safe_get
 import openai
@@ -8,11 +8,17 @@ import re
 from github import Github
 import requests
 from jirassicpack.utils.jira import search_issues
+from marshmallow import Schema, fields, ValidationError
+from jirassicpack.utils.rich_prompt import rich_error
+from jirassicpack.config import ConfigLoader
+from jirassicpack.utils.fields import BaseOptionsSchema
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
+llm_config = ConfigLoader().get_llm_config()
+
 def call_local_llm_text(prompt):
-    url = "http://localhost:5000/generate/text"  # Ollama7BPoc Flask API
+    url = llm_config['text_url']
     response = requests.post(url, json={"prompt": prompt})
     response.raise_for_status()
     return response.json()["response"]
@@ -22,7 +28,7 @@ def call_local_llm_github_pr(repo_name, pr_number, github_token, prompt=None):
     Calls the local LLM HTTP API to analyze a GitHub PR directly, letting the local LLM handle the GitHub API call.
     Optionally sends a custom prompt to the local LLM.
     """
-    url = "http://localhost:5000/generate/github-pr"
+    url = llm_config['github_url']
     payload = {
         "repo": repo_name,
         "pr_number": pr_number,
@@ -93,6 +99,7 @@ def select_jira_issues(jira):
 def ticket_discussion_summary(jira, params, user_email=None, batch_index=None, unique_suffix=None):
     """
     Summarize one or more Jira tickets' discussion and resolution using LLM.
+    Now uses standardized Markdown report template.
     """
     issue_keys = params.get("issue_keys") or ([params["issue_key"]] if "issue_key" in params else [])
     output_dir = params.get("output_dir", "output")
@@ -118,217 +125,94 @@ def ticket_discussion_summary(jira, params, user_email=None, batch_index=None, u
         for c in comments:
             pr_links += re.findall(r'https://github.com/[^\s)]+/pull/\d+', c.get('body', ''))
         pr_links = list(set(pr_links))  # Deduplicate
-
         # --- Linked Pull Requests Section ---
         if not pr_links:
             pr_section = '\n## Linked Pull Requests\n_No pull requests found in description or comments._\n'
         else:
             pr_section = '\n## Linked Pull Requests\n' + '\n'.join(f'- {url}' for url in pr_links) + '\n'
-
-        # --- GitHub PR Analysis via Jira Development Panel ---
-        github_section = ''
-        dev_panel = fields.get('development') or fields.get('customfield_development')
-        github_prs = []
-        if dev_panel and 'pullRequests' in dev_panel:
-            github_prs = dev_panel['pullRequests']
-        pr_analyses = []
-        tech_summaries = []
-        if github_prs:
-            github_token = os.environ.get('GITHUB_TOKEN')
-            if not github_token:
-                try:
-                    github_token = prompt_password("Enter your GitHub API token (for PR analysis):")
-                except Exception:
-                    github_token = None
-            gh = Github(github_token) if github_token else Github()
-            for pr in github_prs:
-                pr_url = pr.get('url') or pr.get('remoteUrl') or pr.get('self')
-                if not pr_url:
-                    continue
-                m = re.match(r'https://github.com/([^/]+)/([^/]+)/pull/(\d+)', pr_url)
-                if not m:
-                    continue
-                owner, repo, number = m.groups()
-                try:
-                    repo_obj = gh.get_repo(f"{owner}/{repo}")
-                    pr_obj = repo_obj.get_pull(int(number))
-                    pr_title = pr_obj.title or ''
-                    pr_body = pr_obj.body or ''
-                    # PR comments (issue comments)
-                    comments_data = list(pr_obj.get_issue_comments())
-                    # PR reviews
-                    reviews_data = list(pr_obj.get_reviews())
-                    # PR commits
-                    commits_data = list(pr_obj.get_commits())
-                except Exception as e:
-                    continue
-                pr_comments = '\n'.join([c.body for c in comments_data])
-                pr_reviews = '\n'.join([r.body for r in reviews_data if r.body])
-                commit_msgs = '\n'.join([c.commit.message for c in commits_data if hasattr(c, 'commit') and hasattr(c.commit, 'message')])
-                # --- Technical Summary Section ---
-                code_and_docs = []
-                code_and_docs += re.findall(r'```[\s\S]*?```', pr_body)
-                doc_commits = [msg for msg in commit_msgs.split('\n') if 'readme' in msg.lower() or 'doc' in msg.lower()]
-                for c in comments_data:
-                    code_and_docs += re.findall(r'```[\s\S]*?```', getattr(c, 'body', ''))
-                tech_prompt = f"""
-Analyze the following code snippets, comments, and documentation-related commit messages for technical changes, improvements, or documentation updates. Summarize the technical impact and any documentation changes:
-
-Code/Docs:
-{chr(10).join(code_and_docs)}
-
-Documentation-related commits:
-{chr(10).join(doc_commits)}
-"""
-                tech_summary = ''
-                if code_and_docs or doc_commits:
-                    try:
-                        with spinner(f"Summarizing technical/code changes for PR #{number} with LLM..."):
-                            tech_summary = call_local_llm_text(tech_prompt)
-                    except Exception:
-                        tech_summary = "(Failed to summarize technical/code changes via local LLM)"
-                else:
-                    tech_summary = "No code snippets or documentation updates detected."
-                tech_summaries.append(f"### [{pr_title}]({pr_url})\n{tech_summary}")
-                # --- PR Analysis Section ---
-                gh_prompt = f"""
-Summarize the following GitHub PR for a technical audience:
-- PR Title: {pr_title}
-- PR Description: {pr_body}
-- PR Comments: {pr_comments}
-- PR Reviews: {pr_reviews}
-- Commit Messages: {commit_msgs}
-
-Highlight major discussion points, code changes, errors, and the resolution/outcome.
-"""
-                try:
-                    with spinner(f"Summarizing GitHub PR #{number} with LLM..."):
-                        gh_summary = call_local_llm_text(gh_prompt)
-                except Exception:
-                    gh_summary = "(Failed to summarize PR via local LLM)"
-                pr_analyses.append(f"### [{pr_title}]({pr_url})\n{gh_summary}")
-        # Always show both sections, even if empty
-        if not tech_summaries:
-            tech_summaries = ["No code snippets or documentation updates detected."]
-        if not pr_analyses:
-            pr_analyses = ["No GitHub PRs found or analyzed."]
-        github_section = '\n## Technical Summary\n' + '\n\n'.join(tech_summaries) + '\n\n## GitHub Pull Request Analysis\n' + '\n\n'.join(pr_analyses) + '\n'
-
-        # --- Jira Discussion Section ---
-        jira_discussion_prompt = f"""
-Summarize the following Jira ticket's description, acceptance criteria, and comments. Highlight the initial context, major points of discussion, and any resolutions or open questions.
-
-**Description:**
-{description}
-
-**Acceptance Criteria:**
-{acceptance_criteria}
-
-**Comments:**
-{comments_text}
-"""
-        jira_discussion_summary = ''
-        if description or acceptance_criteria or comments_text:
+        # --- Technical Summary Section (LLM) ---
+        tech_summary = ""
+        if description:
+            tech_prompt = f"Summarize the technical discussion and resolution for the following Jira issue description and comments:\n\nDescription:\n{description}\n\nComments:\n{comments_text}"
             try:
-                with spinner("Summarizing Jira discussion with LLM..."):
-                    jira_response = openai.ChatCompletion.create(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "user", "content": jira_discussion_prompt}],
-                        max_tokens=512,
-                        temperature=0.3,
-                    )
-                    jira_discussion_summary = jira_response.choices[0].message.content.strip()
+                with spinner(f"Summarizing technical/code changes for {issue_key} with LLM..."):
+                    tech_summary = call_local_llm_text(tech_prompt)
             except Exception:
-                jira_discussion_summary = "(Failed to summarize Jira discussion via LLM)"
+                tech_summary = "(Failed to summarize technical/code changes via local LLM)"
+        # --- Compose report sections ---
+        header = f"# 💬 Ticket Discussion Summary\n\n"
+        header += f"**Feature:** Ticket Discussion Summary  "
+        header += f"**Issue Key:** {issue_key}  "
+        header += f"**Created by:** {user_email}  "
+        header += f"**Run at:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  "
+        header += "\n\n---\n\n"
+        toc = "## Table of Contents\n- [Linked Pull Requests](#linked-pull-requests)\n- [Technical Summary](#technical-summary)\n\n"
+        summary_table = "| Field | Value |\n|---|---|\n"
+        summary_table += f"| Issue Key | {issue_key} |\n"
+        summary_table += f"| Description | {description[:40]} |\n"
+        summary_table += f"| Acceptance Criteria | {acceptance_criteria[:40]} |\n"
+        summary_table += f"| Comments | {len(comments)} |\n"
+        summary_table += "\n---\n\n"
+        action_items = "## Action Items\n"
+        if not comments:
+            action_items += "- ⚠️ No comments on this issue.\n"
         else:
-            jira_discussion_summary = "No Jira discussion found."
-        jira_section = f"\n## Jira Discussion\n{jira_discussion_summary}\n"
+            action_items += "- Review discussion for unresolved questions.\n"
+        top_n_lists = ""
+        related_links = f"## Related Links\n- [View in Jira](https://your-domain.atlassian.net/browse/{issue_key})\n"
+        grouped_section = pr_section + "\n## Technical Summary\n" + tech_summary + "\n"
+        export_metadata = f"---\n**Report generated by:** {user_email}  \n**Run at:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
+        glossary = "## Glossary\n- ⚠️ Needs attention\n"
+        next_steps = "## Next Steps\n- Follow up on any open questions or action items in the discussion.\n"
+        report = render_markdown_report_template(
+            report_header=header,
+            table_of_contents=toc,
+            report_summary=summary_table,
+            action_items=action_items,
+            top_n_lists=top_n_lists,
+            related_links=related_links,
+            grouped_issue_sections=grouped_section,
+            export_metadata=export_metadata,
+            glossary=glossary,
+            next_steps=next_steps
+        )
+        filename = os.path.join(output_dir, f"ticket_discussion_summary_{issue_key}.md")
+        with open(filename, 'w') as f:
+            f.write(report)
+        info(f"💬 Ticket discussion summary written to {filename}", extra=context)
 
-        # --- Final Analysis Section ---
-        final_analysis_prompt = f"""
-Given the following sections from a Jira ticket summary:
-
-[Jira Discussion]
-{jira_discussion_summary}
-
-[Technical Summary]
-{chr(10).join(tech_summaries)}
-
-[GitHub Pull Request Analysis]
-{chr(10).join(pr_analyses)}
-
-[Linked Pull Requests]
-{pr_section}
-
-Analyze and extrapolate the current state of the ticket and describe its progression from start to finish. Highlight any blockers, resolutions, or next steps.
-"""
-        final_analysis = ''
-        try:
-            with spinner("Generating final analysis with LLM..."):
-                final_response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": final_analysis_prompt}],
-                    max_tokens=512,
-                    temperature=0.3,
-                )
-                final_analysis = final_response.choices[0].message.content.strip()
-        except Exception:
-            final_analysis = "(Failed to generate final analysis via LLM)"
-        final_section = f"\n## Final Analysis\n{final_analysis}\n"
-
-        prompt = f"""
-You are an expert technical summarizer. Given the following Jira ticket data, produce a Markdown summary with:
-- Initial context
-- Major points of discussion
-- Summaries of code examples
-- Errors discussed
-- Resolution (if any)
-
----
-
-**Description:**
-{description}
-
-**Acceptance Criteria:**
-{acceptance_criteria}
-
-**Comments:**
-{comments_text}
-"""
-        try:
-            with spinner("Summarizing with LLM..."):
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=1024,
-                    temperature=0.3,
-                )
-                summary = response.choices[0].message.content.strip()
-        except Exception as e:
-            error(f"LLM summarization failed: {e}", extra=context)
-            continue
-        filename = f"{output_dir}/{issue_key}_discussion_summary{unique_suffix or ''}.md"
-        with open(filename, "w") as f:
-            f.write(f"# Ticket Discussion Summary and Resolution\n\n**Issue:** {issue_key}\n"
-                    f"{jira_section}"
-                    f"{github_section}"
-                    f"{pr_section}"
-                    f"{final_section}")
-        info(f"📝 Ticket discussion summary written to {filename}", extra=context)
+class TicketDiscussionSummaryOptionsSchema(BaseOptionsSchema):
+    issue_keys = fields.List(fields.Str(), required=True)
 
 def prompt_ticket_discussion_summary_options(opts, jira=None):
     """
     Prompt for ticket discussion summary options, supporting multi-issue selection.
     """
-    if jira:
-        issues = select_jira_issues(jira)
-    else:
-        issue_key = get_option(opts, 'issue_key', prompt="🦖 Jira Issue Key (e.g., DEMO-123):", required=True)
-        issues = [issue_key]
-    output_dir = get_option(opts, 'output_dir', default='output')
-    unique_suffix = opts.get('unique_suffix', '')
-    return {
-        'issue_keys': issues,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
-    } 
+    schema = TicketDiscussionSummaryOptionsSchema()
+    while True:
+        if jira:
+            issues = select_jira_issues(jira)
+        else:
+            issue_key = get_option(opts, 'issue_key', prompt="🦖 Jira Issue Key (e.g., DEMO-123):", required=True)
+            issues = [issue_key]
+        output_dir = get_option(opts, 'output_dir', default='output')
+        unique_suffix = opts.get('unique_suffix', '')
+        data = {
+            'issue_keys': issues,
+            'output_dir': output_dir,
+            'unique_suffix': unique_suffix
+        }
+        try:
+            validated = schema.load(data)
+            return validated
+        except ValidationError as err:
+            for field, msgs in err.messages.items():
+                suggestion = None
+                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
+                    message, suggestion = msgs[0]
+                elif isinstance(msgs, list) and msgs:
+                    message = msgs[0]
+                else:
+                    message = str(msgs)
+                rich_error(f"Input validation error for '{field}': {message}", suggestion)
+            continue 

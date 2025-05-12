@@ -3,7 +3,7 @@
 # It prompts for user, start/end dates, fetches completed issues, and outputs a Markdown report with a metrics table.
 
 from datetime import datetime
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info, write_markdown_file
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info, write_markdown_file, make_output_filename, render_markdown_report_template
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user
 from jirassicpack.utils.io import get_option, validate_required, validate_date, error, safe_get, require_param, render_markdown_report
@@ -13,33 +13,70 @@ from collections import defaultdict, Counter
 import logging
 import time
 import questionary
+from marshmallow import Schema, fields, ValidationError, pre_load
+from jirassicpack.utils.rich_prompt import rich_error
+from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
+from jirassicpack.config import ConfigLoader
 
 logger = logging.getLogger(__name__)
 
+class AdvancedMetricsOptionsSchema(BaseOptionsSchema):
+    user = fields.Str(required=True, error_messages={"required": "Jira user is required."}, validate=validate_nonempty)
+    start_date = fields.Str(required=True, error_messages={"required": "Start date is required."}, validate=validate_date)
+    end_date = fields.Str(required=True, error_messages={"required": "End date is required."}, validate=validate_date)
+    output_dir = fields.Str(load_default='output')
+    unique_suffix = fields.Str(load_default='')
+
+    @pre_load
+    def normalize(self, data, **kwargs):
+        for k, v in data.items():
+            if isinstance(v, str):
+                data[k] = v.strip()
+        return data
+
 def prompt_advanced_metrics_options(options: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for advanced metrics options, always prompting for user selection (no default to current user).
+    Prompt for advanced metrics options using Marshmallow schema for validation and normalization.
+    Prompts for user, start/end dates, and output directory.
+    Returns a validated dictionary of all options needed for advanced metrics.
     """
-    user = options.get('user')
-    if not user and jira:
-        info("Please select a Jira user for advanced metrics.")
-        user = select_jira_user(jira)
-        if not user:
-            info("Aborted user selection for advanced metrics.")
-            return None
-    elif not user:
-        user = get_option(options, 'user', prompt="Jira Username for metrics:", required=True)
-    start_date = get_option(options, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
-    end_date = get_option(options, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
-    return {
-        'user': user,
-        'start_date': start_date,
-        'end_date': end_date,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
-    }
+    schema = AdvancedMetricsOptionsSchema()
+    data = dict(options)
+    while True:
+        try:
+            validated = schema.load(data)
+            # Validate date fields using validate_date utility
+            try:
+                validate_date(validated['start_date'])
+            except Exception:
+                data['start_date'] = get_option(data, 'start_date', prompt="🦖 Start date (YYYY-MM-DD):", required=True, validate=validate_date)
+                continue
+            try:
+                validate_date(validated['end_date'])
+            except Exception:
+                data['end_date'] = get_option(data, 'end_date', prompt="🦖 End date (YYYY-MM-DD):", required=True, validate=validate_date)
+                continue
+            return validated
+        except ValidationError as err:
+            for field, msgs in err.messages.items():
+                suggestion = None
+                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
+                    message, suggestion = msgs[0]
+                elif isinstance(msgs, list) and msgs:
+                    message = msgs[0]
+                else:
+                    message = str(msgs)
+                if field == 'user' and jira:
+                    info("Please select a Jira user for advanced metrics.")
+                    user = select_jira_user(jira)
+                    if not user:
+                        info("Aborted user selection for advanced metrics.")
+                        return None
+                    data['user'] = user
+                else:
+                    data[field] = get_option(data, field, prompt=f"🦖 {field.replace('_', ' ').title()}: ", required=True)
+                rich_error(f"Input validation error for '{field}': {message}", suggestion)
+            continue
 
 def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
     """
@@ -80,199 +117,133 @@ def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_i
             contextual_log('error', f"📊 [Advanced Metrics] Failed to fetch issues: {e}", exc_info=True, operation="api_call", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
             error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context, feature='advanced_metrics')
             return
-        # --- Analytics Aggregation ---
-        cycle_times = []
-        lead_times = []
-        status_times = defaultdict(list)  # status -> list of time spent
-        type_cycle = defaultdict(list)
-        priority_cycle = defaultdict(list)
-        due_met = 0
-        due_missed = 0
-        due_late_days = []
-        throughput_week = Counter()
-        throughput_month = Counter()
-        per_assignee = defaultdict(list)
-        open_issues = []
-        slowest = None
-        fastest = None
-        min_cycle = None
-        max_cycle = None
-        today = datetime.utcnow()
-        issue_rows = []
+        # Try to get display name/accountId for header
+        display_name = user
+        account_id = user
+        try:
+            user_obj = jira.get_user(account_id=user)
+            display_name = user_obj.get('displayName', user)
+            account_id = user_obj.get('accountId', user)
+        except Exception:
+            pass
+        from jirassicpack.config import ConfigLoader
+        jira_conf = ConfigLoader().get_jira_config()
+        base_url = jira_conf['url'].rstrip('/')
+        run_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+        # Order by issue key
+        issues = sorted(issues, key=lambda i: i.get('key', ''))
+        # Group by issue type
+        grouped = defaultdict(list)
         for issue in issues:
-            fields = issue.get('fields', {})
-            key = issue.get('key', 'N/A')
-            summary = safe_get(issue, ['fields', 'summary'], '')
-            created = safe_get(issue, ['fields', 'created'], '')[:10]
-            resolved = safe_get(issue, ['fields', 'resolutiondate'], '')[:10]
-            status = safe_get(issue, ['fields', 'status', 'name'], '')
-            itype = safe_get(issue, ['fields', 'issuetype', 'name'], '')
-            priority = safe_get(issue, ['fields', 'priority', 'name'], '')
-            duedate = safe_get(issue, ['fields', 'duedate'], '')[:10]
-            assignee = safe_get(issue, ['fields', 'assignee', 'displayName'], user)
-            # Cycle time
-            cycle_time = None
-            if created and resolved:
+            itype = safe_get(issue, ['fields', 'issuetype', 'name'], 'Other')
+            grouped[itype].append(issue)
+        # Try to get project category from first issue
+        project_category = safe_get(issues[0], ['fields', 'project', 'projectCategory', 'name'], 'N/A') if issues else 'N/A'
+        # Report header
+        header = f"# 📊 Advanced Metrics Report\n\n"
+        header += f"**Feature:** Advanced Metrics  "
+        header += f"**User:** {display_name} ({account_id})  "
+        header += f"**Time range:** {start_date} to {end_date}  "
+        header += f"**Project Category:** {project_category}  "
+        header += f"**Run at:** {run_at}  "
+        header += "\n\n---\n\n"
+        # Report summary table
+        summary_table = "| Metric | Value |\n|---|---|\n"
+        summary_table += f"| Total Issues | {len(issues)} |\n"
+        for itype, group in grouped.items():
+            summary_table += f"| {itype} | {len(group)} |\n"
+        summary_table += "\n---\n\n"
+        # Build table of contents
+        toc = "## Table of Contents\n"
+        for itype in grouped:
+            anchor = itype.lower().replace(' ', '-')
+            toc += f"- [{itype} Issues](#{anchor}-issues)\n"
+        toc += "\n"
+        # Action items: unresolved, overdue, blocked
+        action_items = "## Action Items\n"
+        overdue = [i for group in grouped.values() for i in group if safe_get(i, ['fields', 'status', 'name'], '').lower() not in ['done', 'closed'] and safe_get(i, ['fields', 'duedate']) and safe_get(i, ['fields', 'duedate']) < datetime.now().strftime('%Y-%m-%d')]
+        if overdue:
+            action_items += "### Overdue Issues\n"
+            for issue in overdue:
+                key = issue.get('key', '')
+                summary = safe_get(issue, ['fields', 'summary'], '')[:40]
+                due = safe_get(issue, ['fields', 'duedate'], '')
+                action_items += f"- 🔴 [{key}] {summary} (Due: {due})\n"
+        else:
+            action_items += "No overdue issues!\n"
+        # Visual enhancements: status emoji
+        def status_emoji(status):
+            s = status.lower()
+            if s in ['done', 'closed', 'resolved']:
+                return '✅'
+            elif s in ['in progress', 'in review', 'doing']:
+                return '🟡'
+            elif s in ['blocked', 'on hold']:
+                return '🔴'
+            return '⬜️'
+        # Top N lists
+        assignees = [safe_get(i, ['fields', 'assignee', 'displayName'], '') for group in grouped.values() for i in group]
+        top_assignees = Counter(assignees).most_common(5)
+        top_n_lists = "## Top 5 Assignees\n"
+        for name, count in top_assignees:
+            if name:
+                top_n_lists += f"- {name}: {count} issues\n"
+        # Related links
+        related_links = "## Related Links\n"
+        related_links += f"- [Project Dashboard]({base_url}/projects)\n"
+        # Export metadata
+        export_metadata = f"---\n**Report generated by:** {user_email}  \n**Run at:** {run_at}  \n**Filters:** User: {display_name}, Time: {start_date} to {end_date}\n"
+        # Glossary
+        glossary = "## Glossary\n- ✅ Done/Closed/Resolved\n- 🟡 In Progress/In Review/Doing\n- 🔴 Blocked/On Hold/Overdue\n- ⬜️ Other statuses\n"
+        # Next steps
+        next_steps = "## Next Steps\n"
+        if overdue:
+            next_steps += "- Review and resolve overdue issues.\n"
+        if not top_assignees or (top_assignees and top_assignees[0][1] < 3):
+            next_steps += "- Consider rebalancing workload among assignees.\n"
+        # Grouped issue sections
+        grouped_sections = ""
+        for itype, group in grouped.items():
+            anchor = itype.lower().replace(' ', '-')
+            grouped_sections += f"\n## {itype} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
+            grouped_sections += "| Key | Summary | Status | Assignee | Components | Project Category | Created | Updated | Age (days) | Link |\n"
+            grouped_sections += "|---|---|---|---|---|---|---|---|---|---|\n"
+            for issue in group:
+                key = issue.get('key', '')
+                summary = safe_get(issue, ['fields', 'summary'], '')[:40]
+                status = safe_get(issue, ['fields', 'status', 'name'], '')
+                emoji = status_emoji(status)
+                assignee = safe_get(issue, ['fields', 'assignee', 'displayName'], '')
+                components = ', '.join([c['name'] for c in issue.get('fields', {}).get('components', [])])
+                proj_cat = safe_get(issue, ['fields', 'project', 'projectCategory', 'name'], project_category)
+                created = safe_get(issue, ['fields', 'created'], '')
+                updated = safe_get(issue, ['fields', 'updated'], '')
+                age = ''
                 try:
-                    d1 = datetime.strptime(created, "%Y-%m-%d")
-                    d2 = datetime.strptime(resolved, "%Y-%m-%d")
-                    cycle_time = (d2 - d1).days
-                    cycle_times.append(cycle_time)
-                    type_cycle[itype].append(cycle_time)
-                    priority_cycle[priority].append(cycle_time)
-                    # Throughput
-                    week = d2.strftime("%Y-W%U")
-                    month = d2.strftime("%Y-%m")
-                    throughput_week[week] += 1
-                    throughput_month[month] += 1
-                    per_assignee[assignee].append(cycle_time)
-                    # Outliers
-                    if min_cycle is None or cycle_time < min_cycle:
-                        min_cycle = cycle_time
-                        fastest = (key, summary, cycle_time)
-                    if max_cycle is None or cycle_time > max_cycle:
-                        max_cycle = cycle_time
-                        slowest = (key, summary, cycle_time)
+                    if created:
+                        age = (datetime.now() - datetime.strptime(created[:10], '%Y-%m-%d')).days
                 except Exception:
-                    cycle_time = 'N/A'
-            # Lead time (if changelog available)
-            lead_time = None
-            changelog = issue.get('changelog', {}).get('histories', [])
-            in_progress_date = None
-            if changelog and created:
-                for hist in changelog:
-                    for item in hist.get('items', []):
-                        if item.get('field') == 'status' and item.get('toString', '').lower() in ['in progress', 'in review', 'doing']:
-                            in_progress_date = hist.get('created', '')[:10]
-                            break
-                    if in_progress_date:
-                        break
-                if in_progress_date:
-                    try:
-                        d1 = datetime.strptime(created, "%Y-%m-%d")
-                        d2 = datetime.strptime(in_progress_date, "%Y-%m-%d")
-                        lead_time = (d2 - d1).days
-                        lead_times.append(lead_time)
-                    except Exception:
-                        lead_time = 'N/A'
-            # Status time analysis (bottleneck)
-            if changelog and created:
-                status_entry = {}
-                last_date = created
-                for hist in changelog:
-                    hist_date = hist.get('created', '')[:10]
-                    for item in hist.get('items', []):
-                        if item.get('field') == 'status':
-                            prev_status = item.get('fromString', '')
-                            new_status = item.get('toString', '')
-                            if prev_status:
-                                try:
-                                    d1 = datetime.strptime(last_date, "%Y-%m-%d")
-                                    d2 = datetime.strptime(hist_date, "%Y-%m-%d")
-                                    status_times[prev_status].append((d2 - d1).days)
-                                except Exception:
-                                    pass
-                        last_date = hist_date
-                # Final status duration
-                if status:
-                    try:
-                        d1 = datetime.strptime(last_date, "%Y-%m-%d")
-                        d2 = datetime.strptime(resolved, "%Y-%m-%d") if resolved else today
-                        status_times[status].append((d2 - d1).days)
-                    except Exception:
-                        pass
-            # SLA/Deadline
-            if duedate and resolved:
-                try:
-                    due_dt = datetime.strptime(duedate, "%Y-%m-%d")
-                    res_dt = datetime.strptime(resolved, "%Y-%m-%d")
-                    if res_dt <= due_dt:
-                        due_met += 1
-                    else:
-                        due_missed += 1
-                        due_late_days.append((key, (res_dt - due_dt).days))
-                except Exception:
-                    pass
-            # Open/overdue
-            if not resolved:
-                open_issues.append((key, summary, created))
-            # Issue row for table
-            issue_rows.append((key, summary, itype, priority, status, created, resolved, cycle_time if cycle_time is not None else '', lead_time if lead_time is not None else '', duedate, assignee))
-        # --- Aggregated Stats ---
-        avg_cycle = round(mean(cycle_times), 2) if cycle_times else 'N/A'
-        med_cycle = round(median(cycle_times), 2) if cycle_times else 'N/A'
-        min_cycle_val = min_cycle if min_cycle is not None else 'N/A'
-        max_cycle_val = max_cycle if max_cycle is not None else 'N/A'
-        avg_lead = round(mean(lead_times), 2) if lead_times else 'N/A'
-        med_lead = round(median(lead_times), 2) if lead_times else 'N/A'
-        # Cycle time buckets
-        buckets = {'<2d': 0, '2-5d': 0, '>5d': 0}
-        for ct in cycle_times:
-            if ct < 2:
-                buckets['<2d'] += 1
-            elif ct <= 5:
-                buckets['2-5d'] += 1
-            else:
-                buckets['>5d'] += 1
-        # Per-user stats
-        assignee_stats = {a: (len(lst), round(mean(lst),2) if lst else 'N/A') for a, lst in per_assignee.items()}
-        # --- Markdown Output ---
-        summary_section = f"**Total issues resolved:** {len(cycle_times)}\n\n**Average cycle time:** {avg_cycle} days\n\n**Median cycle time:** {med_cycle} days"
-        if fastest:
-            summary_section += f"\n\n**Fastest issue:** {fastest[0]} ({fastest[2]} days)"
-        if slowest:
-            summary_section += f"\n\n**Slowest issue:** {slowest[0]} ({slowest[2]} days)"
-        if avg_lead != 'N/A':
-            summary_section += f"\n\n**Average lead time:** {avg_lead} days"
-        if med_lead != 'N/A':
-            summary_section += f"\n\n**Median lead time:** {med_lead} days"
-        details_section = "## Cycle Time Distribution\n"
-        details_section += f"- <2 days: {buckets['<2d']} issues\n"
-        details_section += f"- 2–5 days: {buckets['2-5d']} issues\n"
-        details_section += f"- >5 days: {buckets['>5d']} issues\n"
-        details_section += "\n## Throughput by Month\n"
-        for m in sorted(throughput_month):
-            details_section += f"- {m}: {throughput_month[m]} issues\n"
-        details_section += "\n## Cycle Time by Type\n"
-        for t, vals in type_cycle.items():
-            details_section += f"- {t}: {round(mean(vals),2) if vals else 'N/A'} days\n"
-        details_section += "\n## Cycle Time by Priority\n"
-        for p, vals in priority_cycle.items():
-            details_section += f"- {p}: {round(mean(vals),2) if vals else 'N/A'} days\n"
-        details_section += "\n## SLA/Deadline Analysis\n"
-        details_section += f"- Issues met due date: {due_met}\n"
-        details_section += f"- Issues missed due date: {due_missed}\n"
-        if due_late_days:
-            details_section += f"- Avg days late: {round(mean([d for _,d in due_late_days]),2)}\n"
-            details_section += f"- Most late: {max(due_late_days, key=lambda x: x[1])}\n"
-        details_section += "\n## Per-Assignee Stats\n"
-        for a, (count, avg) in assignee_stats.items():
-            details_section += f"- {a}: {count} issues, avg cycle time {avg} days\n"
-        details_section += "\n## Status/Stage Analysis\n"
-        for s, vals in status_times.items():
-            details_section += f"- {s}: avg {round(mean(vals),2) if vals else 'N/A'} days\n"
-        details_section += "\n## Outliers and Action Items\n"
-        if open_issues:
-            details_section += f"- Open/Unresolved issues: {len(open_issues)}\n"
-            for k, s, c in open_issues:
-                details_section += f"  - {k}: {s} (created {c})\n"
-        details_section += "\n## Issue Table\n"
-        details_section += "| Key | Summary | Type | Priority | Status | Created | Resolved | Cycle Time | Lead Time | Due Date | Assignee |\n"
-        details_section += "|-----|---------|------|----------|--------|---------|----------|------------|-----------|----------|----------|\n"
-        for row in issue_rows:
-            details_section += f"| {' | '.join(str(x) for x in row)} |\n"
-        filename = f"{output_dir}/{user}_{start_date}_to_{end_date}_advanced_metrics{unique_suffix}.md"
-        content = render_markdown_report(
-            feature="advanced_metrics",
-            user=user_email,
-            batch=batch_index,
-            suffix=unique_suffix,
-            feature_title="Advanced Metrics",
-            summary_section=summary_section,
-            main_content_section=details_section
+                    age = ''
+                link = f"[{key}]({base_url}/browse/{key})"
+                grouped_sections += f"| {key} | {summary} | {emoji} {status} | {assignee} | {components} | {proj_cat} | {created} | {updated} | {age} | {link} |\n"
+            grouped_sections += "\n"
+        # Compose final report
+        report = render_markdown_report_template(
+            report_header=header,
+            table_of_contents=toc,
+            report_summary=summary_table,
+            action_items=action_items,
+            top_n_lists=top_n_lists,
+            related_links=related_links,
+            grouped_issue_sections=grouped_sections,
+            export_metadata=export_metadata,
+            glossary=glossary,
+            next_steps=next_steps
         )
-        with open(filename, 'w') as f:
-            f.write(content)
+        # Write to file
+        filename = make_output_filename(output_dir, f"advanced_metrics_{user_email}_{start_date}_{end_date}_{unique_suffix}")
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(report)
         # Enhanced output file write log
         contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='advanced_metrics')
         # Enhanced feature end log

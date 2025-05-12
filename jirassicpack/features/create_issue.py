@@ -2,7 +2,7 @@
 # This feature allows users to create a new Jira issue by prompting for project, summary, description, and issue type.
 # It writes the created issue's key and summary to a Markdown file for record-keeping.
 
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, info, get_option
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, info, get_option, make_output_filename, render_markdown_report_template
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import get_valid_project_key, get_valid_issue_type
 from jirassicpack.utils.io import validate_required, error, render_markdown_report
@@ -10,56 +10,137 @@ from typing import Any, Dict
 import logging
 import json
 import time
+from marshmallow import Schema, fields, ValidationError, pre_load, validate
+from jirassicpack.utils.rich_prompt import rich_error
+import re
+from jirassicpack.utils.fields import IssueKeyField, ProjectKeyField, BaseOptionsSchema, validate_nonempty
+from datetime import datetime
+
+class CreateIssueOptionsSchema(BaseOptionsSchema):
+    project = ProjectKeyField(required=True, error_messages={"required": "Project key is required."})
+    summary = fields.Str(required=True, error_messages={"required": "Summary is required."}, validate=validate_nonempty)
+    description = fields.Str(load_default='', validate=validate_nonempty)
+    issue_type = fields.Str(load_default='Task', validate=validate.OneOf(['Task', 'Bug', 'Story']))
+    # output_dir and unique_suffix are inherited
 
 def prompt_create_issue_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
     Prompt for create issue options using Jira-aware helpers for project and issue type.
     """
-    proj = opts.get('project')
-    if not proj and jira:
-        proj = get_valid_project_key(jira)
-    elif not proj:
-        proj = get_option(opts, 'project', prompt="🦖 Jira Project Key:")
-    summ = get_option(opts, 'summary', prompt="🦖 Issue Summary:")
-    desc = get_option(opts, 'description', prompt="🦖 Issue Description:", default='')
-    itype = opts.get('issue_type')
-    if not itype and jira and proj:
-        itype = get_valid_issue_type(jira, proj)
-    elif not itype:
-        itype = get_option(opts, 'issue_type', prompt="🦖 Issue Type:", default='Task')
-    out_dir = get_option(opts, 'output_dir', default='output')
-    suffix = opts.get('unique_suffix', '')
-    return {
-        'project': proj,
-        'summary': summ,
-        'description': desc,
-        'issue_type': itype,
-        'output_dir': out_dir,
-        'unique_suffix': suffix
-    }
+    schema = CreateIssueOptionsSchema()
+    data = dict(opts)
+    while True:
+        try:
+            validated = schema.load(data)
+            return validated
+        except ValidationError as err:
+            for field, msgs in err.messages.items():
+                suggestion = None
+                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
+                    # Marshmallow 4+ error tuples: (message, suggestion)
+                    message, suggestion = msgs[0]
+                elif isinstance(msgs, list) and msgs:
+                    message = msgs[0]
+                else:
+                    message = str(msgs)
+                if field == 'project' and jira:
+                    data['project'] = get_valid_project_key(jira)
+                else:
+                    data[field] = get_option(data, field, prompt=f"🦖 {field.replace('_', ' ').title()}: ", required=True)
+                rich_error(f"Input validation error for '{field}': {message}", suggestion)
+            continue
 
 def write_create_issue_file(filename: str, issue_key: str, summary: str, user_email=None, batch_index=None, unique_suffix=None, context=None, issue=None) -> None:
-    try:
-        summary_section = f"**Key:** {issue_key}\n\n**Summary:** {summary}"
-        details_section = ""
-        if issue:
-            details_section = "| Field | Value |\n|-------|-------|\n"
-            for k, v in issue.items():
-                details_section += f"| {k} | {v} |\n"
-        content = render_markdown_report(
-            feature="create_issue",
-            user=user_email,
-            batch=batch_index,
-            suffix=unique_suffix,
-            feature_title="Create Issue",
-            summary_section=summary_section,
-            main_content_section=details_section
-        )
-        with open(filename, 'w') as f:
-            f.write(content)
-        info(f"🦖 Created issue details written to {filename}", extra=context)
-    except Exception as e:
-        error(f"Failed to write created issue file: {e}", extra=context)
+    """
+    Write a Markdown file for a created issue, with a report header, summary, and standardized layout.
+    """
+    from jirassicpack.config import ConfigLoader
+    jira_conf = ConfigLoader().get_jira_config()
+    base_url = jira_conf['url'].rstrip('/')
+    created_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+    link = f"{base_url}/browse/{issue_key}"
+    # Report header
+    header = f"# 📝 Create Issue Report\n\n"
+    header += f"**Feature:** Create Issue  "
+    header += f"**Issue Key:** [{issue_key}]({link})  "
+    header += f"**Project:** {issue.get('fields', {}).get('project', {}).get('key', 'N/A')}  "
+    header += f"**Type:** {issue.get('fields', {}).get('issuetype', {}).get('name', 'N/A')}  "
+    header += f"**Created by:** {user_email}  "
+    header += f"**Created at:** {created_at}  "
+    if batch_index is not None:
+        header += f"**Batch index:** {batch_index}  "
+    header += "\n\n---\n\n"
+    # Table of contents (not needed for single issue, but placeholder)
+    toc = ""
+    # Report summary table
+    summary_table = "| Field | Value |\n|---|---|\n"
+    fields = [
+        ("Key", issue_key),
+        ("Project", issue.get('fields', {}).get('project', {}).get('key', 'N/A')),
+        ("Type", issue.get('fields', {}).get('issuetype', {}).get('name', 'N/A')),
+        ("Summary", summary),
+        ("Description", issue.get('fields', {}).get('description', '')),
+        ("Reporter", issue.get('fields', {}).get('reporter', {}).get('displayName', 'N/A')),
+        ("Assignee", issue.get('fields', {}).get('assignee', {}).get('displayName', 'N/A')),
+        ("Status", issue.get('fields', {}).get('status', {}).get('name', 'N/A')),
+        ("Created", issue.get('fields', {}).get('created', '')),
+        ("Updated", issue.get('fields', {}).get('updated', '')),
+    ]
+    for k, v in fields:
+        summary_table += f"| {k} | {v} |\n"
+    summary_table += "\n---\n\n"
+    # Action items (e.g., if not assigned or not in Done)
+    action_items = "## Action Items\n"
+    status = issue.get('fields', {}).get('status', {}).get('name', '').lower()
+    assignee = issue.get('fields', {}).get('assignee', {}).get('displayName', '')
+    if not assignee:
+        action_items += "- ⚠️ No assignee set.\n"
+    if status not in ['done', 'closed', 'resolved']:
+        action_items += f"- ⏳ Issue is not resolved (status: {status.title()})\n"
+    if action_items.strip() == "## Action Items":
+        action_items += "- No immediate action items.\n"
+    # Top N lists (not as relevant for single issue, but placeholder)
+    top_n_lists = ""
+    # Related links
+    related_links = f"## Related Links\n- [View in Jira]({link})\n- [Project Dashboard]({base_url}/projects)\n"
+    # Grouped issue section (single issue)
+    grouped_section = "## Issue Details\n\n"
+    grouped_section += "| Field | Value |\n|---|---|\n"
+    for k, v in fields:
+        grouped_section += f"| {k} | {v} |\n"
+    grouped_section += "\n---\n\n"
+    grouped_section += f"- [View in Jira]({link})\n"
+    if issue:
+        grouped_section += "<details><summary>Raw Issue JSON</summary>\n\n"
+        grouped_section += "```json\n" + json.dumps(issue, indent=2) + "\n```"
+        grouped_section += "\n</details>\n"
+    # Export metadata
+    export_metadata = f"---\n**Report generated by:** {user_email}  \n**Run at:** {created_at}  \n"
+    # Glossary
+    glossary = "## Glossary\n- ⚠️ Needs attention\n- ⏳ Not resolved\n"
+    # Next steps
+    next_steps = "## Next Steps\n"
+    if not assignee:
+        next_steps += "- Assign this issue to a team member.\n"
+    if status not in ['done', 'closed', 'resolved']:
+        next_steps += "- Move the issue to Done/Closed when resolved.\n"
+    if next_steps.strip() == "## Next Steps":
+        next_steps += "- No immediate next steps.\n"
+    # Compose final report
+    report = render_markdown_report_template(
+        report_header=header,
+        table_of_contents=toc,
+        report_summary=summary_table,
+        action_items=action_items,
+        top_n_lists=top_n_lists,
+        related_links=related_links,
+        grouped_issue_sections=grouped_section,
+        export_metadata=export_metadata,
+        glossary=glossary,
+        next_steps=next_steps
+    )
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(report)
 
 def write_create_issue_json(filename: str, issue: dict, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
     try:
@@ -110,10 +191,11 @@ def create_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index
             info("🦖 See, Nobody Cares. No issue was created.", extra=context, feature='create_issue')
             contextual_log('warning', "No issue was created.", operation="feature_end", status="skipped", extra=context, feature='create_issue')
             return
-        filename = f"{output_dir}/{params['project']}_created_issue{unique_suffix}.md"
+        params_list = [("project", project), ("summary", summary), ("issue_type", params.get("issue_type"))]
+        filename = make_output_filename("create_issue", params_list, output_dir)
         write_create_issue_file(filename, issue.get('key', 'N/A'), params['summary'], user_email, batch_index, unique_suffix, context=context, issue=issue)
         contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='create_issue')
-        json_filename = f"{output_dir}/{params['project']}_created_issue{unique_suffix}.json"
+        json_filename = make_output_filename("create_issue", params_list, output_dir, ext="json")
         write_create_issue_json(json_filename, issue, user_email, batch_index, unique_suffix, context=context)
         contextual_log('info', f"JSON file written: {json_filename}", operation="output_write", output_file=json_filename, status="success", extra=context, feature='create_issue')
         celebrate_success()

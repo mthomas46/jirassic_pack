@@ -2,16 +2,26 @@
 # This feature summarizes worklogs for a given Jira user and timeframe.
 # It prompts for user, start/end dates, fetches issues with worklogs, and outputs a Markdown report with worklog details per issue.
 
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info, prompt_with_validation, validate_required, validate_date, error, spinner, info_spared_no_expense, safe_get, write_markdown_file, require_param, render_markdown_report, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info, prompt_with_validation, validate_required, validate_date, error, spinner, info_spared_no_expense, safe_get, write_markdown_file, require_param, render_markdown_report, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, rich_error, render_markdown_report_template
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user, get_valid_project_key, get_valid_issue_type, get_valid_user, get_valid_field, get_valid_transition, select_account_id, select_property_key, search_issues
 from datetime import datetime
 from typing import Any, Dict, List
 import time
 import os
+from jirassicpack.utils.fields import BaseOptionsSchema, validate_date, validate_nonempty
+from marshmallow import fields, validate
+from marshmallow.exceptions import ValidationError
+from collections import Counter
 
 # Module-level cache for Jira users
 _CACHED_JIRA_USERS = None
+
+class TimeTrackingOptionsSchema(BaseOptionsSchema):
+    user = fields.Str(required=True, error_messages={"required": "User is required."}, validate=validate_nonempty)
+    start_date = fields.Str(required=True, error_messages={"required": "Start date is required."}, validate=validate_date)
+    end_date = fields.Str(required=True, error_messages={"required": "End date is required."}, validate=validate_date)
+    # output_dir and unique_suffix are inherited
 
 def select_jira_user(jira, allow_multiple=False, default_user=None):
     """
@@ -150,69 +160,117 @@ def select_jira_user(jira, allow_multiple=False, default_user=None):
             break
     return users
 
-def prompt_time_tracking_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
+def prompt_time_tracking_options(options: dict) -> dict:
     """
-    Prompt for time tracking options using Jira-aware helpers for user selection.
-    Always prompt for user, using config/environment value as default.
-    Uses email address if available, otherwise accountId.
+    Prompt for time tracking options using get_option utility and validate with schema.
     """
-    config_user = opts.get('user') or os.environ.get('JIRA_USER')
-    user_obj = None
-    if jira:
-        info("Please select a Jira user for time tracking and worklogs.")
-        label, user_obj = select_jira_user(jira, default_user=config_user)
-        # Prefer email address for JQL, fallback to accountId
-        if user_obj:
-            usr = user_obj.get('emailAddress') or user_obj.get('accountId') or ''
-        else:
-            usr = ''
-        if not usr:
-            info("Aborted user selection for time tracking and worklogs.")
-            return None
-    else:
-        usr = get_option(opts, 'user', prompt="Jira Username for worklogs:", default=config_user, required=True)
-    start = get_option(opts, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
-    end = get_option(opts, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
-    out_dir = get_option(opts, 'output_dir', default='output')
-    suffix = opts.get('unique_suffix', '')
-    return {
-        'user': usr,
-        'start_date': start,
-        'end_date': end,
-        'output_dir': out_dir,
-        'unique_suffix': suffix
+    schema = TimeTrackingOptionsSchema()
+    user = get_option(options, 'user', prompt="Jira Username for worklogs:", required=True)
+    start_date = get_option(options, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
+    end_date = get_option(options, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
+    output_dir = get_option(options, 'output_dir', default='output')
+    unique_suffix = options.get('unique_suffix', '')
+    data = {
+        'user': user,
+        'start_date': start_date,
+        'end_date': end_date,
+        'output_dir': output_dir,
+        'unique_suffix': unique_suffix
     }
+    try:
+        validated = schema.load(data)
+        return validated
+    except ValidationError as err:
+        for field, msgs in err.messages.items():
+            suggestion = None
+            if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
+                message, suggestion = msgs[0]
+            elif isinstance(msgs, list) and msgs:
+                message = msgs[0]
+            else:
+                message = str(msgs)
+            rich_error(f"Input validation error for '{field}': {message}", suggestion)
+        return None
 
 def write_worklog_summary_file(filename: str, user: str, start_date: str, end_date: str, issues: list, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
     try:
-        summary_section = f"**User:** {user}\n\n**Timeframe:** {start_date} to {end_date}\n\n**Total Issues with Worklogs:** {len(issues)}"
-        details_section = ""
+        # Header
+        header = f"# ⏳ Worklog Summary Report\n\n"
+        header += f"**Feature:** Time Tracking & Worklogs  "
+        header += f"**User:** {user}  "
+        header += f"**Timeframe:** {start_date} to {end_date}  "
+        header += f"**Total Issues with Worklogs:** {len(issues)}  "
+        header += "\n\n---\n\n"
+        # Table of contents (not needed for simple table, but placeholder)
+        toc = ""
+        # Summary table
+        summary_table = "| Issue Key | Summary | Total Worklog (h) |\n|---|---|---|\n"
+        user_worklog_totals = Counter()
         for issue in issues:
             key = issue.get('key', 'N/A')
             summary = safe_get(issue, ['fields', 'summary'], 'N/A')
             worklogs = safe_get(issue, ['fields', 'worklog', 'worklogs'], [])
-            details_section += f"\n### {key}: {summary}\n"
-            if not worklogs:
-                details_section += "No worklogs found.\n"
-            for wl in worklogs:
-                author = safe_get(wl, ['author', 'displayName'], 'Unknown')
-                started = safe_get(wl, ['started'], 'N/A')
-                time_spent = safe_get(wl, ['timeSpent'], 'N/A')
-                details_section += f"- {author}: {time_spent} on {started}\n"
-        content = render_markdown_report(
-            feature="time_tracking_worklogs",
-            user=user_email,
-            batch=batch_index,
-            suffix=unique_suffix,
-            feature_title="Time Tracking & Worklogs",
-            summary_section=summary_section,
-            main_content_section=details_section
+            total_seconds = sum(w.get('timeSpentSeconds', 0) for w in worklogs)
+            total_hours = round(total_seconds / 3600, 2)
+            summary_table += f"| {key} | {summary[:40]} | {total_hours} |\n"
+            for w in worklogs:
+                author = safe_get(w, ['author', 'displayName'], 'N/A')
+                user_worklog_totals[author] += w.get('timeSpentSeconds', 0)
+        summary_table += "\n---\n\n"
+        # Action items: highlight issues with no worklog or very high/low worklog
+        action_items = "## Action Items\n"
+        no_worklog = [i for i in issues if not safe_get(i, ['fields', 'worklog', 'worklogs'])]
+        if no_worklog:
+            action_items += "### Issues with No Worklog\n"
+            for issue in no_worklog:
+                key = issue.get('key', '')
+                summary = safe_get(issue, ['fields', 'summary'], '')[:40]
+                action_items += f"- ⚠️ [{key}] {summary}\n"
+        else:
+            action_items += "All issues have worklogs.\n"
+        # Top N lists
+        top_n_lists = "## Top 5 Users by Worklog Hours\n"
+        for name, seconds in user_worklog_totals.most_common(5):
+            hours = round(seconds / 3600, 2)
+            top_n_lists += f"- {name}: {hours}h\n"
+        # Related links
+        related_links = "## Related Links\n- [Jira Dashboard](https://your-domain.atlassian.net)\n"
+        # Grouped issue section (detailed worklogs)
+        grouped_section = "## Worklog Details\n\n"
+        grouped_section += "| Issue Key | Summary | Worklog Author | Time Spent (h) | Started | Comment |\n|---|---|---|---|---|---|\n"
+        for issue in issues:
+            key = issue.get('key', 'N/A')
+            summary = safe_get(issue, ['fields', 'summary'], 'N/A')[:40]
+            worklogs = safe_get(issue, ['fields', 'worklog', 'worklogs'], [])
+            for w in worklogs:
+                author = safe_get(w, ['author', 'displayName'], 'N/A')
+                time_spent = round(w.get('timeSpentSeconds', 0) / 3600, 2)
+                started = w.get('started', '')
+                comment = w.get('comment', '')
+                grouped_section += f"| {key} | {summary} | {author} | {time_spent} | {started} | {comment} |\n"
+        # Export metadata
+        export_metadata = f"---\n**Report generated by:** {user_email}  \n**Run at:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
+        # Glossary
+        glossary = "## Glossary\n- ⚠️ No worklog\n"
+        # Next steps
+        next_steps = "## Next Steps\n- Review issues with missing worklogs.\n- Investigate outliers in worklog hours.\n"
+        # Compose final report
+        report = render_markdown_report_template(
+            report_header=header,
+            table_of_contents=toc,
+            report_summary=summary_table,
+            action_items=action_items,
+            top_n_lists=top_n_lists,
+            related_links=related_links,
+            grouped_issue_sections=grouped_section,
+            export_metadata=export_metadata,
+            glossary=glossary,
+            next_steps=next_steps
         )
         with open(filename, 'w') as f:
-            f.write(content)
-        info(f"⏳ Worklog summary written to {filename}", extra=context)
+            f.write(report)
     except Exception as e:
-        error(f"Failed to write worklog summary file: {e}", extra=context)
+        error(f"Failed to write worklog summary file: {e}")
 
 def generate_worklog_summary(issues: List[Dict[str, Any]], start_date: str, end_date: str) -> List[Dict[str, Any]]:
     """

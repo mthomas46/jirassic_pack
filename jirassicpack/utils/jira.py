@@ -45,6 +45,7 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
                 "How would you like to select the user?",
                 choices=[
                     "Search for a user",
+                    "Fuzzy search all users (local)",
                     "Pick from list",
                     "Use current user",
                     "Abort"
@@ -55,17 +56,63 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
                 search_term = prompt_text("Enter name or email to search:")
                 # Live query Jira for the search term
                 matches_batch = jira.search_users(query=search_term, max_results=100)
+                # Separate valid and invalid email users
+                import re
+                valid_email = lambda e: e and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e)
                 matches = [
                     (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
-                    for u in matches_batch if u.get('emailAddress')
+                    for u in matches_batch if valid_email(u.get('emailAddress'))
+                ]
+                matches = sorted(matches, key=lambda x: x[0])  # Sort alphabetically
+                invalids = [
+                    (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
+                    for u in matches_batch if not valid_email(u.get('emailAddress'))
                 ]
                 if not matches:
                     info("No users found matching your search.")
                     continue
+                if len(matches_batch) == 100:
+                    info("Warning: Only the first 100 results are shown. There may be more matching users.")
+                # Optionally show users with missing/malformed email
+                if invalids:
+                    show_invalids = prompt_select("Show users with missing or malformed email?", ["Yes", "No"], default="No")
+                    if show_invalids == "Yes":
+                        from jirassicpack.utils.rich_prompt import rich_panel
+                        user_list = "\n".join([i[0] for i in invalids])
+                        rich_panel(user_list, title="Users with Missing or Malformed Email", style="warning")
+                # Toggle to show filtered users
+                from jirassicpack.utils.rich_prompt import rich_panel
+                show_list = prompt_select("Show filtered users before selection?", ["Yes", "No"], default="No")
+                if show_list == "Yes":
+                    user_list = "\n".join([m[0] for m in matches])
+                    rich_panel(user_list, title="Filtered Users", style="info")
                 picked_label = select_with_pagination_and_fuzzy([m[0] for m in matches], message="Select a user:")
                 if not picked_label:
                     continue
                 picked = next((m for m in matches if m[0] == picked_label), None)
+                if picked:
+                    return picked
+            elif method == "Fuzzy search all users (local)":
+                # Local fuzzy search on the full cached list
+                import re
+                valid_email = lambda e: e and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e)
+                filtered_choices = [c for c in user_choices if valid_email(c[1].get('emailAddress'))]
+                invalids = [c for c in user_choices if not valid_email(c[1].get('emailAddress'))]
+                if invalids:
+                    show_invalids = prompt_select("Show users with missing or malformed email?", ["Yes", "No"], default="No")
+                    if show_invalids == "Yes":
+                        from jirassicpack.utils.rich_prompt import rich_panel
+                        user_list = "\n".join([i[0] for i in invalids])
+                        rich_panel(user_list, title="Users with Missing or Malformed Email", style="warning")
+                show_list = prompt_select("Show filtered users before selection?", ["Yes", "No"], default="No")
+                if show_list == "Yes":
+                    from jirassicpack.utils.rich_prompt import rich_panel
+                    user_list = "\n".join([c[0] for c in filtered_choices])
+                    rich_panel(user_list, title="Filtered Users", style="info")
+                picked_label = select_with_pagination_and_fuzzy([c[0] for c in filtered_choices], message="Fuzzy search all users:")
+                if not picked_label:
+                    continue
+                picked = next((c for c in filtered_choices if c[0] == picked_label), None)
                 if picked:
                     return picked
             elif method == "Pick from list":
@@ -94,6 +141,7 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
             "How would you like to select users? (multi-select mode)",
             choices=[
                 "Search for a user",
+                "Fuzzy search all users (local)",
                 "Pick from list",
                 "Use current user",
                 "Clear selected",
@@ -106,17 +154,59 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
             search_term = prompt_text("Enter name or email to search:")
             # Live query Jira for the search term
             matches_batch = jira.search_users(query=search_term, max_results=100)
+            import re
+            valid_email = lambda e: e and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e)
             matches = [
                 (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
-                for u in matches_batch if u.get('emailAddress')
+                for u in matches_batch if valid_email(u.get('emailAddress'))
+            ]
+            matches = sorted(matches, key=lambda x: x[0])  # Sort alphabetically
+            invalids = [
+                (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
+                for u in matches_batch if not valid_email(u.get('emailAddress'))
             ]
             if not matches:
                 info("No users found matching your search.")
                 continue
+            if len(matches_batch) == 100:
+                info("Warning: Only the first 100 results are shown. There may be more matching users.")
+            if invalids:
+                show_invalids = prompt_select("Show users with missing or malformed email?", ["Yes", "No"], default="No")
+                if show_invalids == "Yes":
+                    from jirassicpack.utils.rich_prompt import rich_panel
+                    user_list = "\n".join([i[0] for i in invalids])
+                    rich_panel(user_list, title="Users with Missing or Malformed Email", style="warning")
+            from jirassicpack.utils.rich_prompt import rich_panel
+            show_list = prompt_select("Show filtered users before selection?", ["Yes", "No"], default="No")
+            if show_list == "Yes":
+                user_list = "\n".join([m[0] for m in matches])
+                rich_panel(user_list, title="Filtered Users", style="info")
             picked_label = select_with_pagination_and_fuzzy([m[0] for m in matches], message="Select a user:")
             if not picked_label:
                 continue
             picked = next((m for m in matches if m[0] == picked_label), None)
+            if picked and picked not in users:
+                users.append(picked)
+        elif method == "Fuzzy search all users (local)":
+            import re
+            valid_email = lambda e: e and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e)
+            filtered_choices = [c for c in user_choices if valid_email(c[1].get('emailAddress'))]
+            invalids = [c for c in user_choices if not valid_email(c[1].get('emailAddress'))]
+            if invalids:
+                show_invalids = prompt_select("Show users with missing or malformed email?", ["Yes", "No"], default="No")
+                if show_invalids == "Yes":
+                    from jirassicpack.utils.rich_prompt import rich_panel
+                    user_list = "\n".join([i[0] for i in invalids])
+                    rich_panel(user_list, title="Users with Missing or Malformed Email", style="warning")
+            show_list = prompt_select("Show filtered users before selection?", ["Yes", "No"], default="No")
+            if show_list == "Yes":
+                from jirassicpack.utils.rich_prompt import rich_panel
+                user_list = "\n".join([c[0] for c in filtered_choices])
+                rich_panel(user_list, title="Filtered Users", style="info")
+            picked_label = select_with_pagination_and_fuzzy([c[0] for c in filtered_choices], message="Fuzzy search all users:")
+            if not picked_label:
+                continue
+            picked = next((c for c in filtered_choices if c[0] == picked_label), None)
             if picked and picked not in users:
                 users.append(picked)
         elif method == "Pick from list":

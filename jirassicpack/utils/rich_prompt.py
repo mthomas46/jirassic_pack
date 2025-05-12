@@ -36,8 +36,14 @@ def rich_info(message):
 def rich_warning(message):
     console.print(f"{JURASSIC_ICON} [warning]{message}[/warning]")
 
-def rich_error(message):
-    console.print(f"{JURASSIC_ICON} [error]{message}[/error]")
+def rich_error(message, suggestion=None):
+    """
+    Print a Jurassic Park–themed error message with optional suggestion/example.
+    """
+    error_text = f"🦖 {message}"
+    if suggestion:
+        error_text += f"\n[bold yellow]Hint:[/] {suggestion}"
+    console.print(Panel(Text(error_text, style="bold red"), title="[bold red]Error![/]", border_style="red"))
 
 def rich_success(message):
     console.print(f"{JURASSIC_ICON} [success]{message}[/success]")

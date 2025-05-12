@@ -9,35 +9,54 @@ from jirassicpack.utils.jira import select_jira_user, get_valid_transition
 from typing import Any, Dict, List, Tuple
 import json
 import time
+from marshmallow import Schema, fields, ValidationError, validate
+from jirassicpack.utils.rich_prompt import rich_error
+from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
 
 def prompt_bulk_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
     Prompt for bulk operation options using Jira-aware helpers for value selection.
     """
-    act = get_option(opts, 'action', prompt="🦴 Bulk action:", choices=BULK_ACTIONS)
-    jql = get_option(opts, 'jql', prompt="🦴 JQL for selecting issues:")
-    val = opts.get('value', '')
-    if not val and jira and act == 'transition':
-        key = opts.get('issue_key') or get_option(opts, 'issue_key', prompt="🦴 Issue Key for transition:")
-        val = get_valid_transition(jira, key)
-    elif not val and jira and act == 'assign':
-        info("Please select a Jira user to assign issues to.")
-        label, user_obj = select_jira_user(jira)
-        val = user_obj.get('accountId') if user_obj else ''
-        if not val:
-            info("Aborted user selection for assignment.")
-            return None
-    elif not val:
-        val = get_option(opts, 'value', prompt="🦴 Value for action (if applicable):", default='')
-    out_dir = get_option(opts, 'output_dir', default='output')
-    suffix = opts.get('unique_suffix', '')
-    return {
-        'action': act,
-        'jql': jql,
-        'value': val,
-        'output_dir': out_dir,
-        'unique_suffix': suffix
-    }
+    schema = BulkOptionsSchema()
+    while True:
+        act = get_option(opts, 'action', prompt="🦴 Bulk action:", choices=BULK_ACTIONS)
+        jql = get_option(opts, 'jql', prompt="🦴 JQL for selecting issues:")
+        val = opts.get('value', '')
+        if not val and jira and act == 'transition':
+            key = opts.get('issue_key') or get_option(opts, 'issue_key', prompt="🦴 Issue Key for transition:")
+            val = get_valid_transition(jira, key)
+        elif not val and jira and act == 'assign':
+            info("Please select a Jira user to assign issues to.")
+            label, user_obj = select_jira_user(jira)
+            val = user_obj.get('accountId') if user_obj else ''
+            if not val:
+                info("Aborted user selection for assignment.")
+                return None
+        elif not val:
+            val = get_option(opts, 'value', prompt="🦴 Value for action (if applicable):", default='')
+        out_dir = get_option(opts, 'output_dir', default='output')
+        suffix = opts.get('unique_suffix', '')
+        data = {
+            'action': act,
+            'jql': jql,
+            'value': val,
+            'output_dir': out_dir,
+            'unique_suffix': suffix
+        }
+        try:
+            validated = schema.load(data)
+            return validated
+        except ValidationError as err:
+            for field, msgs in err.messages.items():
+                suggestion = None
+                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
+                    message, suggestion = msgs[0]
+                elif isinstance(msgs, list) and msgs:
+                    message = msgs[0]
+                else:
+                    message = str(msgs)
+                rich_error(f"Input validation error for '{field}': {message}", suggestion)
+            continue
 
 def write_bulk_report(filename: str, action: str, results: list, user_email=None, batch_index=None, unique_suffix=None, context=None, summary=None) -> None:
     try:
@@ -179,3 +198,9 @@ def bulk_operations(jira: Any, params: Dict[str, Any], user_email=None, batch_in
         contextual_log('error', f"🦴 [Bulk Operations] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", extra=context, feature='bulk_operations')
         error(f"🦴 [Bulk Operations] Exception: {e}", extra=context, feature='bulk_operations')
         raise 
+
+class BulkOptionsSchema(BaseOptionsSchema):
+    action = fields.Str(required=True, validate=validate.OneOf(['transition', 'comment', 'assign']), error_messages={"required": "Action is required."})
+    jql = fields.Str(required=True, validate=validate_nonempty, error_messages={"required": "JQL is required."})
+    value = fields.Str(allow_none=True, validate=validate_nonempty)
+    # output_dir and unique_suffix are inherited 

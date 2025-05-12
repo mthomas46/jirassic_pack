@@ -8,52 +8,45 @@ from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_c
 from jirassicpack.utils.io import error, render_markdown_report
 from jirassicpack.utils.jira import select_board_name, select_sprint_name
 import time
+from marshmallow import Schema, fields, ValidationError, pre_load
+from jirassicpack.utils.rich_prompt import rich_error
+from jirassicpack.utils.fields import BaseOptionsSchema
 
-def prompt_sprint_board_management_options(options: Dict[str, Any], jira=None) -> Dict[str, Any]:
+class SprintBoardManagementOptionsSchema(BaseOptionsSchema):
+    board_name = fields.Str(required=True, error_messages={"required": "Board name is required."})
+    sprint_name = fields.Str(required=True, error_messages={"required": "Sprint name is required."})
+    # output_dir and unique_suffix are inherited
+
+def prompt_sprint_board_management_options(options: dict) -> dict:
     """
-    Prompt for sprint board options using get_option utility.
-    Prompts for the board name, sprint name, and output directory.
-    Returns a dictionary of all options needed for the board summary.
+    Prompt for sprint board options using get_option utility and validate with schema.
     """
-    board_name = options.get('board_name')
-    board_id = None
-    if not board_name and jira:
-        # Use select_board_name and also get the board_id
-        while True:
-            board_name = select_board_name(jira)
-            if not board_name:
-                continue
-            boards = jira.list_boards(name=board_name)
-            for b in boards:
-                if b.get('name') == board_name:
-                    board_id = b.get('id')
-                    break
-            if board_id:
-                break
-            info(f"No board found with name '{board_name}'. Please try again.", feature='sprint_board_management')
-    elif not board_name:
+    schema = SprintBoardManagementOptionsSchema()
+    while True:
         board_name = get_option(options, 'board_name', prompt="Jira Board Name:", required=True)
-    else:
-        # If board_name is provided, try to get board_id
-        if jira:
-            boards = jira.list_boards(name=board_name)
-            for b in boards:
-                if b.get('name') == board_name:
-                    board_id = b.get('id')
-                    break
-    sprint_name = options.get('sprint_name')
-    if not sprint_name and jira:
-        sprint_name = select_sprint_name(jira, board_name, board_id)
-    elif not sprint_name:
         sprint_name = get_option(options, 'sprint_name', prompt="Sprint Name:", required=True)
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
-    return {
-        'board_name': board_name,
-        'sprint_name': sprint_name,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
-    }
+        output_dir = get_option(options, 'output_dir', default='output')
+        unique_suffix = options.get('unique_suffix', '')
+        data = {
+            'board_name': board_name,
+            'sprint_name': sprint_name,
+            'output_dir': output_dir,
+            'unique_suffix': unique_suffix
+        }
+        try:
+            validated = schema.load(data)
+            return validated
+        except ValidationError as err:
+            for field, msgs in err.messages.items():
+                suggestion = None
+                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
+                    message, suggestion = msgs[0]
+                elif isinstance(msgs, list) and msgs:
+                    message = msgs[0]
+                else:
+                    message = str(msgs)
+                rich_error(f"Input validation error for '{field}': {message}", suggestion)
+            continue
 
 def write_sprint_board_file(filename: str, board_name: str, sprints: list, issues: list, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
     try:

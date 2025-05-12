@@ -1,19 +1,43 @@
 from typing import Any, Dict, List, Tuple
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, safe_get, write_markdown_file, require_param, render_markdown_report, info, get_option, error, validate_required
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, safe_get, write_markdown_file, require_param, render_markdown_report, info, get_option, error, validate_required, rich_error
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 import re
 import time
+from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
+from marshmallow import fields, ValidationError
 
-def prompt_integration_options(options: Dict[str, Any]) -> Dict[str, Any]:
-    """Prompt for integration options using get_option utility."""
-    jql = get_option(options, 'integration_jql', prompt="🔗 JQL to find issues for integration scan:", required=True)
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
-    return {
-        'integration_jql': jql,
-        'output_dir': output_dir,
-        'unique_suffix': unique_suffix
-    }
+class IntegrationOptionsSchema(BaseOptionsSchema):
+    integration_jql = fields.Str(required=True, error_messages={"required": "JQL is required for integration scan."}, validate=validate_nonempty)
+    # output_dir and unique_suffix are inherited
+
+def prompt_integration_options(options: dict) -> dict:
+    """
+    Prompt for integration options using get_option utility and validate with schema.
+    """
+    schema = IntegrationOptionsSchema()
+    while True:
+        jql = get_option(options, 'integration_jql', prompt="🔗 JQL to find issues for integration scan:", required=True)
+        output_dir = get_option(options, 'output_dir', default='output')
+        unique_suffix = options.get('unique_suffix', '')
+        data = {
+            'integration_jql': jql,
+            'output_dir': output_dir,
+            'unique_suffix': unique_suffix
+        }
+        try:
+            validated = schema.load(data)
+            return validated
+        except ValidationError as err:
+            for field, msgs in err.messages.items():
+                suggestion = None
+                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
+                    message, suggestion = msgs[0]
+                elif isinstance(msgs, list) and msgs:
+                    message = msgs[0]
+                else:
+                    message = str(msgs)
+                rich_error(f"Input validation error for '{field}': {message}", suggestion)
+            continue
 
 def write_integration_links_file(filename: str, pr_links: list, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
     try:

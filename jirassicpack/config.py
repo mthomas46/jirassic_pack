@@ -1,6 +1,10 @@
 import os
 import yaml
 from jirassicpack.utils.logging import redact_sensitive, contextual_log
+from marshmallow import Schema, fields, ValidationError, pre_load
+from jirassicpack.utils.rich_prompt import rich_error
+from jirassicpack.utils.io import get_option
+from jirassicpack.utils.fields import BaseOptionsSchema
 
 class ConfigLoader:
     """
@@ -36,11 +40,22 @@ class ConfigLoader:
         url = os.environ.get('JIRA_URL') or self.config.get('jira', {}).get('url')
         email = os.environ.get('JIRA_EMAIL') or self.config.get('jira', {}).get('email')
         api_token = os.environ.get('JIRA_API_TOKEN') or self.config.get('jira', {}).get('api_token')
-        return {
+        config = {
             'url': url,
             'email': email,
             'api_token': api_token
         }
+        schema = JirassicConfigSchema()
+        while True:
+            try:
+                validated = schema.load(config)
+                return validated
+            except ValidationError as err:
+                rich_error(f"Jira config validation error: {err.messages}")
+                for field, msgs in err.messages.items():
+                    prompt = f"🦖 Jira {field.replace('_', ' ').title()}: "
+                    config[field] = get_option(config, field, prompt=prompt, required=True)
+                # After correction, loop to re-validate
 
     def get_options(self, feature_name=None):
         # Compose options from env > YAML > default for all known feature options
@@ -97,3 +112,85 @@ class ConfigLoader:
         except Exception as e:
             contextual_log('error', f"⚙️ [Config] Exception occurred during config operation '{operation}': {e}", exc_info=True, operation=operation, error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
             raise 
+
+    def get_llm_config(self):
+        # Unified loader for all LLM endpoints (text, github, file, health)
+        text_url = os.environ.get('LOCAL_LLM_TEXT_URL') or self.config.get('local_llm', {}).get('text_url')
+        github_url = os.environ.get('LOCAL_LLM_GITHUB_URL') or self.config.get('local_llm', {}).get('github_url')
+        file_url = os.environ.get('LOCAL_LLM_FILE_URL') or self.config.get('local_llm', {}).get('file_url')
+        health_url = os.environ.get('LOCAL_LLM_HEALTH_URL') or self.config.get('local_llm', {}).get('health_url')
+        config = {
+            'text_url': text_url,
+            'github_url': github_url,
+            'file_url': file_url,
+            'health_url': health_url
+        }
+        schema = LLMConfigSchema()
+        while True:
+            try:
+                validated = schema.load(config)
+                return validated
+            except ValidationError as err:
+                rich_error(f"Local LLM config validation error: {err.messages}")
+                for field, msgs in err.messages.items():
+                    prompt = f"🦖 Local LLM {field.replace('_', ' ').title()}: "
+                    config[field] = get_option(config, field, prompt=prompt, required=True)
+
+    def get_openai_config(self):
+        api_key = os.environ.get('OPENAI_API_KEY') or self.config.get('openai', {}).get('api_key')
+        model = os.environ.get('OPENAI_MODEL') or self.config.get('openai', {}).get('model')
+        config = {
+            'api_key': api_key,
+            'model': model
+        }
+        schema = OpenAIConfigSchema()
+        while True:
+            try:
+                validated = schema.load(config)
+                return validated
+            except ValidationError as err:
+                rich_error(f"OpenAI config validation error: {err.messages}")
+                for field, msgs in err.messages.items():
+                    prompt = f"🦖 OpenAI {field.replace('_', ' ').title()}: "
+                    config[field] = get_option(config, field, prompt=prompt, required=True)
+
+    def get_github_config(self):
+        url = os.environ.get('GITHUB_URL') or self.config.get('github', {}).get('url')
+        token = os.environ.get('GITHUB_TOKEN') or self.config.get('github', {}).get('token')
+        config = {
+            'url': url,
+            'token': token
+        }
+        schema = GitHubConfigSchema()
+        while True:
+            try:
+                validated = schema.load(config)
+                return validated
+            except ValidationError as err:
+                rich_error(f"GitHub config validation error: {err.messages}")
+                for field, msgs in err.messages.items():
+                    prompt = f"🦖 GitHub {field.replace('_', ' ').title()}: "
+                    config[field] = get_option(config, field, prompt=prompt, required=True)
+
+class JirassicConfigSchema(BaseOptionsSchema):
+    url = fields.Url(required=True, error_messages={"required": "Jira URL is required.", "invalid": "Invalid Jira URL."})
+    email = fields.Email(required=True, error_messages={"required": "Jira email is required.", "invalid": "Invalid email address."})
+    api_token = fields.Str(required=True, error_messages={"required": "Jira API token is required."})
+    # output_dir and unique_suffix are inherited (but not used)
+
+class LLMConfigSchema(BaseOptionsSchema):
+    text_url = fields.Url(required=True, error_messages={"required": "Local LLM text URL is required.", "invalid": "Invalid URL for local LLM text endpoint."})
+    github_url = fields.Url(required=True, error_messages={"required": "Local LLM GitHub URL is required.", "invalid": "Invalid URL for local LLM GitHub endpoint."})
+    file_url = fields.Url(required=True, error_messages={"required": "Local LLM file URL is required.", "invalid": "Invalid URL for local LLM file endpoint."})
+    health_url = fields.Url(required=True, error_messages={"required": "Local LLM health URL is required.", "invalid": "Invalid health URL for local LLM endpoint."})
+    # output_dir and unique_suffix are inherited (but not used)
+
+class OpenAIConfigSchema(BaseOptionsSchema):
+    api_key = fields.Str(required=True, error_messages={"required": "OpenAI API key is required."})
+    model = fields.Str(required=True, error_messages={"required": "OpenAI model is required."})
+    # output_dir and unique_suffix are inherited (but not used)
+
+class GitHubConfigSchema(BaseOptionsSchema):
+    url = fields.Url(required=True, error_messages={"required": "GitHub URL is required.", "invalid": "Invalid GitHub URL."})
+    token = fields.Str(required=True, error_messages={"required": "GitHub token is required."})
+    # output_dir and unique_suffix are inherited (but not used) 

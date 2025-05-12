@@ -13,6 +13,8 @@ from rich.traceback import install as rich_traceback_install
 from jirassicpack.utils.rich_prompt import rich_info, rich_error, rich_warning, rich_success, rich_prompt_text, rich_prompt_confirm, rich_panel
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 from InquirerPy import inquirer
+from marshmallow import ValidationError
+import re
 
 rich_traceback_install()
 
@@ -145,7 +147,6 @@ def get_validated_input(prompt, validate_fn=None, error_msg=None, default=None, 
         contextual_log('info', f"🦖 [CLI] User prompted for validated input: {prompt}", operation="user_prompt", status="answered", params={"prompt": prompt}, retry_count=retry_count, extra={"feature": "get_validated_input"})
         # Regex validation
         if regex:
-            import re
             if not re.match(regex, value or ""):
                 contextual_log('warning', f"🦖 [CLI] Input failed regex validation: {prompt}", operation="input_validation", status="failed", params={"prompt": prompt, "regex": regex, "value": value}, retry_count=retry_count, extra={"feature": "get_validated_input"})
                 print(f"\033[91m{error_msg or 'Input does not match required format.'}\033[0m")
@@ -239,21 +240,78 @@ def info(message, extra=None, feature=None):
 def info_spared_no_expense():
     rich_success("🦖 Spared no expense!")
 
-def prompt_with_validation(prompt, validate_fn=None, error_msg=None, default=None):
+def prompt_with_validation(prompt, validate_fn=None, error_msg=None, default=None, marshmallow_field=None, marshmallow_schema=None):
     while True:
         value = prompt_text(prompt, default=default or '')
+        # Marshmallow field validation
+        if marshmallow_field:
+            try:
+                marshmallow_field.deserialize(value)
+            except ValidationError as err:
+                suggestion = None
+                if hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages and isinstance(err.messages[0], tuple):
+                    message, suggestion = err.messages[0]
+                elif hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages:
+                    message = err.messages[0]
+                else:
+                    message = str(err)
+                rich_error(f"Input validation error: {message}", suggestion)
+                continue
+        # Marshmallow schema validation
+        if marshmallow_schema:
+            try:
+                marshmallow_schema.load({prompt: value})
+            except ValidationError as err:
+                suggestion = None
+                if hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages and isinstance(err.messages[0], tuple):
+                    message, suggestion = err.messages[0]
+                elif hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages:
+                    message = err.messages[0]
+                else:
+                    message = str(err)
+                rich_error(f"Input validation error: {message}", suggestion)
+                continue
         if validate_fn and not validate_fn(value):
-            print(Fore.RED + (error_msg or 'Invalid input.') + Style.RESET_ALL)
+            rich_error(error_msg or 'Invalid input.')
             continue
         if not value or not value.strip():
-            print(Fore.RED + 'Input is required.' + Style.RESET_ALL)
+            rich_error('Input is required.')
             continue
         return value
 
-def get_option(options, key, prompt=None, default=None, choices=None, required=False, validate=None, password=False):
+def get_option(options, key, prompt=None, default=None, choices=None, required=False, validate=None, password=False, marshmallow_field=None, marshmallow_schema=None):
     value = options.get(key, default)
     if value:
-        return value
+        # Marshmallow field validation
+        if marshmallow_field:
+            try:
+                marshmallow_field.deserialize(value)
+            except ValidationError as err:
+                suggestion = None
+                if hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages and isinstance(err.messages[0], tuple):
+                    message, suggestion = err.messages[0]
+                elif hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages:
+                    message = err.messages[0]
+                else:
+                    message = str(err)
+                rich_error(f"Input validation error: {message}", suggestion)
+                value = None
+        # Marshmallow schema validation
+        if marshmallow_schema:
+            try:
+                marshmallow_schema.load({key: value})
+            except ValidationError as err:
+                suggestion = None
+                if hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages and isinstance(err.messages[0], tuple):
+                    message, suggestion = err.messages[0]
+                elif hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages:
+                    message = err.messages[0]
+                else:
+                    message = str(err)
+                rich_error(f"Input validation error: {message}", suggestion)
+                value = None
+        if value:
+            return value
     while True:
         if choices:
             value = prompt_select(prompt or f"Select {key}:", choices=choices)
@@ -261,11 +319,39 @@ def get_option(options, key, prompt=None, default=None, choices=None, required=F
             value = prompt_password(prompt or f"Enter {key}:")
         else:
             value = prompt_text(prompt or f"Enter {key}:", default=default or '')
+        # Marshmallow field validation
+        if marshmallow_field:
+            try:
+                marshmallow_field.deserialize(value)
+            except ValidationError as err:
+                suggestion = None
+                if hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages and isinstance(err.messages[0], tuple):
+                    message, suggestion = err.messages[0]
+                elif hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages:
+                    message = err.messages[0]
+                else:
+                    message = str(err)
+                rich_error(f"Input validation error: {message}", suggestion)
+                continue
+        # Marshmallow schema validation
+        if marshmallow_schema:
+            try:
+                marshmallow_schema.load({key: value})
+            except ValidationError as err:
+                suggestion = None
+                if hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages and isinstance(err.messages[0], tuple):
+                    message, suggestion = err.messages[0]
+                elif hasattr(err, 'messages') and isinstance(err.messages, list) and err.messages:
+                    message = err.messages[0]
+                else:
+                    message = str(err)
+                rich_error(f"Input validation error: {message}", suggestion)
+                continue
         if validate and not validate(value):
-            print(Fore.RED + f"Invalid value for {key}." + Style.RESET_ALL)
+            rich_error(f"Invalid value for {key}.")
             continue
         if required and (not value or not value.strip()):
-            print(Fore.RED + f"{key} is required." + Style.RESET_ALL)
+            rich_error(f"{key} is required.")
             continue
         break
     return value
@@ -424,3 +510,78 @@ def select_with_pagination_and_fuzzy(choices, message="Select an item:", page_si
                 return selection
     else:
         return prompt_select(message, choices=choices) 
+
+def make_output_filename(feature, params, output_dir='output', ext='md'):
+    """
+    Build a human-readable output filename for reports.
+    - feature: string, e.g. 'metrics', 'create_issue'
+    - params: ordered list of (param_name, value) tuples
+    - output_dir: directory for output files
+    - ext: file extension (default 'md')
+    Returns: full path to the output file
+    """
+    def sanitize(val):
+        # Remove/replace unsafe chars, spaces, etc.
+        return re.sub(r'[^\w\-]', '', str(val).replace(' ', '_'))
+    def prettify_param(k, v):
+        # Format dates as YYYYMMDD
+        if isinstance(v, str) and re.match(r'^\d{4}-\d{2}-\d{2}$', v):
+            v = v.replace('-', '')
+        # Truncate summaries/titles
+        if k in ("summary", "title") and isinstance(v, str):
+            v = v[:20]
+        # Usernames as display names: lowercase, underscores
+        if k in ("user", "username", "assignee") and isinstance(v, str):
+            v = v.lower().replace(' ', '_')
+        return sanitize(v)
+    param_str = '_'.join(f"{sanitize(k)}-{prettify_param(k, v)}" for k, v in params if v)
+    date_str = datetime.now().strftime('%m-%d-%y')
+    parts = [feature]
+    if param_str:
+        parts.append(param_str)
+    parts.append(date_str)
+    filename = '_'.join(parts) + f'.{ext}'
+    return f"{output_dir}/{filename}" 
+
+def render_markdown_report_template(
+    report_header: str = '',
+    table_of_contents: str = '',
+    report_summary: str = '',
+    action_items: str = '',
+    top_n_lists: str = '',
+    related_links: str = '',
+    grouped_issue_sections: str = '',
+    export_metadata: str = '',
+    glossary: str = '',
+    next_steps: str = ''
+) -> str:
+    """
+    Standardized Markdown report template for all output features.
+    """
+    return f"""
+{report_header}
+
+{table_of_contents}
+
+{report_summary}
+
+---
+
+{action_items}
+
+{top_n_lists}
+
+{related_links}
+
+---
+
+{grouped_issue_sections}
+
+---
+
+{next_steps}
+
+{export_metadata}
+
+{glossary}
+""" 
