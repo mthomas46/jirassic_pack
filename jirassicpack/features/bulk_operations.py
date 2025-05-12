@@ -3,12 +3,10 @@
 # It prompts the user for the desired action, the JQL to select issues, and the value for the action (if needed).
 # Results are written to a Markdown report for traceability.
 
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, info_spared_no_expense, prompt_with_validation, info
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, info_spared_no_expense, prompt_with_validation, info, validate_required, error, render_markdown_report, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user, get_valid_transition
-from jirassicpack.utils.io import validate_required, error, render_markdown_report, get_option
 from typing import Any, Dict, List, Tuple
-import questionary
 import json
 import time
 
@@ -118,10 +116,11 @@ def bulk_operations(jira: Any, params: Dict[str, Any], user_email=None, batch_in
         unique_suffix = params.get('unique_suffix', '')
         ensure_output_dir(output_dir)
         # Confirmation prompt before proceeding
-        confirm = questionary.confirm(
-            "Are you sure you want to proceed? This could affect many issues.\n🦖 God help us, we're in the hands of devs."
-        ).ask()
-        if not confirm:
+        confirm = prompt_select(
+            "Are you sure you want to proceed? This could affect many issues.\n🦖 God help us, we're in the hands of devs.",
+            choices=["Yes, proceed", "Cancel"]
+        )
+        if confirm != "Yes, proceed":
             info("🦖 Bulk operation cancelled by user.", extra=context, feature='bulk_operations')
             return
         def do_search():

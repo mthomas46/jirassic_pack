@@ -1,7 +1,10 @@
 import questionary
 from typing import Any, Dict, Optional, Tuple, List
 import os
-from jirassicpack.utils.io import info
+from jirassicpack.utils.io import info, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, get_validated_input
+from datetime import datetime
+from jirassicpack.utils.logging import contextual_log
+from jirassicpack.utils.io import pretty_print_result
 
 # Module-level cache for Jira users
 _CACHED_JIRA_USERS = None
@@ -35,7 +38,7 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
     ], key=lambda x: x[0])
     if not allow_multiple:
         while True:
-            method = questionary.select(
+            method = prompt_select(
                 "How would you like to select the user?",
                 choices=[
                     "Search for a user",
@@ -44,25 +47,26 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
                     "Abort"
                 ],
                 default="Pick from list"
-            ).ask()
+            )
             if method == "Search for a user":
-                search_term = questionary.text("Enter name or email to search:").ask()
+                search_term = prompt_text("Enter name or email to search:")
+                # Live query Jira for the search term
+                matches_batch = jira.search_users(query=search_term, max_results=100)
                 matches = [
                     (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
-                    for u in filtered_users
-                    if search_term.lower() in (u.get('displayName','').lower() + u.get('emailAddress','').lower())
+                    for u in matches_batch if u.get('emailAddress')
                 ]
                 if not matches:
                     info("No users found matching your search.")
                     continue
-                picked_label = questionary.select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"]).ask()
+                picked_label = prompt_select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"])
                 if picked_label == "(Cancel)":
                     continue
                 picked = next((m for m in matches if m[0] == picked_label), None)
                 if picked:
                     return picked
             elif method == "Pick from list":
-                picked_label = questionary.select("Select a user:", choices=[c[0] for c in user_choices] + ["(Cancel)"]).ask()
+                picked_label = prompt_select("Select a user:", choices=[c[0] for c in user_choices] + ["(Cancel)"])
                 if picked_label == "(Cancel)":
                     continue
                 picked = next((c for c in user_choices if c[0] == picked_label), None)
@@ -83,7 +87,7 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
     while True:
         if users:
             info(f"Currently selected user(s):\n- " + "\n- ".join([u[0] for u in users]))
-        method = questionary.select(
+        method = prompt_select(
             "How would you like to select users? (multi-select mode)",
             choices=[
                 "Search for a user",
@@ -94,25 +98,26 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
                 "Abort"
             ],
             default="Pick from list"
-        ).ask()
+        )
         if method == "Search for a user":
-            search_term = questionary.text("Enter name or email to search:").ask()
+            search_term = prompt_text("Enter name or email to search:")
+            # Live query Jira for the search term
+            matches_batch = jira.search_users(query=search_term, max_results=100)
             matches = [
                 (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
-                for u in filtered_users
-                if search_term.lower() in (u.get('displayName','').lower() + u.get('emailAddress','').lower())
+                for u in matches_batch if u.get('emailAddress')
             ]
             if not matches:
                 info("No users found matching your search.")
                 continue
-            picked_label = questionary.select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"]).ask()
+            picked_label = prompt_select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"])
             if picked_label == "(Cancel)":
                 continue
             picked = next((m for m in matches if m[0] == picked_label), None)
             if picked and picked not in users:
                 users.append(picked)
         elif method == "Pick from list":
-            picked_label = questionary.select("Select a user:", choices=[c[0] for c in user_choices] + ["(Done)"]).ask()
+            picked_label = prompt_select("Select a user:", choices=[c[0] for c in user_choices] + ["(Done)"])
             if picked_label == "(Done)":
                 break
             picked = next((c for c in user_choices if c[0] == picked_label), None)
@@ -137,139 +142,374 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
             break
     return users
 
-def get_valid_project_key(jira) -> Optional[str]:
-    """
-    Prompt the user to select a Jira project key, or enter manually if not found.
-    """
+def get_valid_project_key(jira):
     try:
         projects = jira.get('project')
         project_keys = [p['key'] for p in projects]
-        return questionary.select(
+        return prompt_select(
             "Select a Jira Project:",
             choices=project_keys
-        ).ask()
+        )
     except Exception:
-        return questionary.text('Enter Jira Project Key:').ask()
+        return get_validated_input('Enter Jira Project Key:', regex=r'^[A-Z][A-Z0-9]+$', error_msg='Invalid project key format.')
 
-def get_valid_issue_type(jira, project_key: str) -> Optional[str]:
-    """
-    Prompt the user to select an issue type for a given project, or enter manually if not found.
-    """
+def get_valid_issue_type(jira, project_key):
     try:
         meta = jira.get(f'issue/createmeta?projectKeys={project_key}')
         types = meta['projects'][0]['issuetypes']
-        return questionary.select(
+        return prompt_select(
             "Select Issue Type:",
             choices=[t['name'] for t in types]
-        ).ask()
+        )
     except Exception:
-        return questionary.text('Enter Issue Type:').ask()
+        return get_validated_input('Enter Issue Type:', error_msg='Invalid issue type.')
 
-def get_valid_user(jira) -> Optional[str]:
-    """
-    Prompt the user to select a user, or enter manually if not found.
-    """
+def get_valid_user(jira):
     try:
         users = jira.search_users("")
         user_choices = [f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>" for u in users]
-        return questionary.select(
+        return prompt_select(
             "Select User:",
             choices=user_choices
-        ).ask()
+        )
     except Exception:
-        return questionary.text('Enter user email or username:').ask()
+        return get_validated_input('Enter user email or username:', regex=r'^[^@\s]+@[^@\s]+\.[^@\s]+$', error_msg='Invalid email format.')
 
-def get_valid_field(jira, project_key: str, issue_type: str) -> Optional[str]:
-    """
-    Prompt the user to select a field, or enter manually if not found.
-    """
+def get_valid_field(jira, project_key, issue_type):
     try:
         fields = jira.get('field')
         field_names = [f['name'] for f in fields if f.get('name')]
-        return questionary.select(
+        return prompt_select(
             "Select Field:",
             choices=field_names
-        ).ask()
+        )
     except Exception:
-        return questionary.text('Enter field name:').ask()
+        return get_validated_input('Enter field name:', error_msg='Invalid field name.')
 
-def get_valid_transition(jira, issue_key: str) -> Optional[str]:
-    """
-    Prompt the user to select a transition, or enter manually if not found.
-    """
+def get_valid_transition(jira, issue_key):
     try:
         transitions = jira.get(f'issue/{issue_key}/transitions')
         choices = [t['name'] for t in transitions.get('transitions',[])]
-        return questionary.select(
+        return prompt_select(
             "Select Transition:",
             choices=choices
-        ).ask()
+        )
     except Exception:
-        return questionary.text('Enter transition name:').ask()
+        return get_validated_input('Enter transition name:', error_msg='Invalid transition.')
 
-def select_account_id(jira) -> Optional[str]:
-    """
-    Use select_jira_user to select a user and return their accountId.
-    """
+def select_account_id(jira):
     label, user_obj = select_jira_user(jira)
     return user_obj.get('accountId') if user_obj else None
 
-def select_property_key(jira, account_id: str) -> Optional[str]:
-    """
-    Prompt the user to select a property key for the given accountId, or enter manually if none are found.
-    """
+def select_property_key(jira, account_id):
     try:
         resp = jira.get('user/properties', params={'accountId': account_id})
         keys = resp.get('keys', [])
         if not keys:
-            return questionary.text("Enter property key:").ask()
+            return prompt_text("Enter property key:")
         choices = [k.get('key') for k in keys]
         choices.append("(Enter manually)")
-        picked = questionary.select("Select a property key:", choices=choices).ask()
+        picked = prompt_select("Select a property key:", choices=choices)
         if picked == "(Enter manually)":
-            return questionary.text("Enter property key:").ask()
+            return prompt_text("Enter property key:")
         return picked
     except Exception:
-        return questionary.text("Enter property key:").ask()
+        return prompt_text("Enter property key:")
 
-def search_issues(jira) -> Optional[Tuple[str, Any]]:
+def search_issues(jira):
     """
-    Prompt the user to search for a Jira issue by key or summary and select from the list, or enter manually if not found. Caches issues per search term.
+    Interactive submenu for searching issues:
+    1. Search by summary or key
+    2. Enter issue key manually
+    3. List all issues
+    4. List my issues
+    5. List recently updated
+    6. Search by reporter
+    7. Search by assignee
+    8. Search by status
+    9. Search by label
+    10. Search by project
+    11. Abort
+    Displays a table/list of results. Optionally, lets the user select one for details.
     """
-    issue_cache = {}
+    def print_issues(issues):
+        if not issues:
+            info("No issues found. Try again or use another option.")
+            return
+        print("\nSearch Results:")
+        for i, issue in enumerate(issues, 1):
+            key = issue.get('key', '?')
+            summary = issue.get('fields', {}).get('summary', '?')
+            status = issue.get('fields', {}).get('status', {}).get('name', '?')
+            assignee = issue.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')
+            print(f"{i}. {key}: {summary} [Status: {status}] [Assignee: {assignee}]")
+
     while True:
-        search_term = questionary.text("Enter issue key or summary to search (leave blank if you don't know):").ask()
-        if not search_term:
-            action = questionary.select(
-                "You didn't enter an issue key or summary. What would you like to do?",
-                choices=["Search for an issue", "Enter issue key manually", "Abort"]
-            ).ask()
-            if action == "Enter issue key manually":
-                return questionary.text("Enter issue key:").ask(), None
-            elif action == "Abort":
-                return None, None
-            search_term = questionary.text("Enter search term for issues (summary or key):").ask()
+        action = prompt_select(
+            "How would you like to search for an issue?",
+            choices=[
+                "Search by summary or key",
+                "Enter issue key manually",
+                "List all issues",
+                "List my issues",
+                "List recently updated",
+                "Search by reporter",
+                "Search by assignee",
+                "Search by status",
+                "Search by label",
+                "Search by project",
+                "Abort"
+            ]
+        )
+        if action == "Abort":
+            return None
+        elif action == "Enter issue key manually":
+            issue_key = prompt_text("Enter issue key:")
+            if not issue_key:
+                continue
+            issue = jira.get_task(issue_key)
+            pretty_print_result(issue)
+            continue
+        elif action == "Search by summary or key":
+            search_term = prompt_text("Enter search term (summary or key):")
             if not search_term:
                 continue
-        if search_term in issue_cache:
-            issues = issue_cache[search_term]
-        else:
-            jql = f"summary ~ '{search_term}' OR key = '{search_term}'"
             try:
-                issues = jira.search_issues(jql, fields=["key", "summary"], max_results=20)
-                issue_cache[search_term] = issues
+                issues = jira.search_issues(f"summary ~ '{search_term}' OR key = '{search_term}'", fields=["key", "summary", "status", "assignee", "comment"], max_results=20)
             except Exception as e:
                 info(f"Error searching issues: {e}")
                 continue
-        if not issues:
-            info("No issues found. Try again or leave blank to enter manually.")
+            print_issues(issues)
             continue
-        issues = sorted(issues, key=lambda i: i.get('key', ''))
-        choices = [f"{i.get('key','?')}: {i.get('fields',{}).get('summary','?')}" for i in issues]
-        choices.append("(Enter manually)")
-        picked = questionary.select("Select an issue:", choices=choices).ask()
-        if picked == "(Enter manually)":
-            return questionary.text("Enter issue key:").ask(), None
-        return picked.split(':')[0] if picked else None, next((i for i in issues if f"{i.get('key','?')}: {i.get('fields',{}).get('summary','?')}" == picked), None)
+        elif action == "List all issues":
+            try:
+                issues = jira.search_issues('ORDER BY updated DESC', fields=["key", "summary", "status", "assignee", "comment"], max_results=20)
+            except Exception as e:
+                info(f"Error listing all issues: {e}")
+                continue
+            print_issues(issues)
+            continue
+        elif action == "List my issues":
+            try:
+                issues = jira.search_issues('assignee = currentUser() ORDER BY updated DESC', fields=["key", "summary", "status", "assignee", "comment"], max_results=20)
+            except Exception as e:
+                info(f"Error listing my issues: {e}")
+                continue
+            print_issues(issues)
+            continue
+        elif action == "List recently updated":
+            try:
+                issues = jira.search_issues('ORDER BY updated DESC', fields=["key", "summary", "status", "assignee", "comment"], max_results=20)
+            except Exception as e:
+                info(f"Error listing recently updated issues: {e}")
+                continue
+            print_issues(issues)
+            continue
+        elif action == "Search by reporter":
+            reporter = prompt_text("Enter reporter username or email:")
+            if not reporter:
+                continue
+            try:
+                issues = jira.search_issues(f'reporter = "{reporter}" ORDER BY updated DESC', fields=["key", "summary", "status", "assignee", "comment"], max_results=20)
+            except Exception as e:
+                info(f"Error searching by reporter: {e}")
+                continue
+            print_issues(issues)
+            continue
+        elif action == "Search by assignee":
+            assignee = prompt_text("Enter assignee username or email:")
+            if not assignee:
+                continue
+            try:
+                issues = jira.search_issues(f'assignee = "{assignee}" ORDER BY updated DESC', fields=["key", "summary", "status", "assignee", "comment"], max_results=20)
+            except Exception as e:
+                info(f"Error searching by assignee: {e}")
+                continue
+            print_issues(issues)
+            continue
+        elif action == "Search by status":
+            status = prompt_text("Enter status (e.g., 'To Do', 'In Progress', 'Done'):")
+            if not status:
+                continue
+            try:
+                issues = jira.search_issues(f'status = "{status}" ORDER BY updated DESC', fields=["key", "summary", "status", "assignee", "comment"], max_results=20)
+            except Exception as e:
+                info(f"Error searching by status: {e}")
+                continue
+            print_issues(issues)
+            continue
+        elif action == "Search by label":
+            label = prompt_text("Enter label:")
+            if not label:
+                continue
+            try:
+                issues = jira.search_issues(f'labels = "{label}" ORDER BY updated DESC', fields=["key", "summary", "status", "assignee", "comment"], max_results=20)
+            except Exception as e:
+                info(f"Error searching by label: {e}")
+                continue
+            print_issues(issues)
+            continue
+        elif action == "Search by project":
+            project = prompt_text("Enter project key:")
+            if not project:
+                continue
+            try:
+                issues = jira.search_issues(f'project = "{project}" ORDER BY updated DESC', fields=["key", "summary", "status", "assignee", "comment"], max_results=20)
+            except Exception as e:
+                info(f"Error searching by project: {e}")
+                continue
+            print_issues(issues)
+            continue
+
+def select_board_name(jira):
+    """
+    Prompt the user to select a Jira board via submenu:
+    - Enter board name to search
+    - Enter manually
+    - Pick from list
+    Returns the selected board name.
+    """
+    while True:
+        method = prompt_select(
+            "How would you like to select a board?",
+            choices=[
+                "Enter board name to search",
+                "Pick from list",
+                "Enter manually",
+                "Abort"
+            ],
+            default="Pick from list"
+        )
+        if method == "Enter board name to search":
+            search_term = prompt_text("Enter board name to search:")
+            if not search_term:
+                continue
+            boards = jira.list_boards(name=search_term)
+            if not boards:
+                print("No boards found matching your search.")
+                continue
+            boards = sorted(boards, key=lambda b: (b.get('name') or '').lower())
+            choices = [f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})" for b in boards]
+            picked = prompt_select("Select a board:", choices=choices + ["(Search again)"])
+            if picked == "(Search again)":
+                continue
+            for b in boards:
+                label = f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})"
+                if picked == label:
+                    return b.get('name')
+        elif method == "Pick from list":
+            boards = jira.list_boards()
+            if not boards:
+                print("No boards found in Jira.")
+                continue
+            boards = sorted(boards, key=lambda b: (b.get('name') or '').lower())
+            choices = [f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})" for b in boards]
+            picked = prompt_select("Select a board:", choices=choices + ["(Abort)"])
+            if picked == "(Abort)":
+                return None
+            for b in boards:
+                label = f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})"
+                if picked == label:
+                    return b.get('name')
+        elif method == "Enter manually":
+            return prompt_text("Enter board name:")
+        else:  # Abort
+            return None
+
+def select_sprint_name(jira, board_name=None, board_id=None):
+    """
+    Prompt the user to select a sprint via submenu:
+    - Enter sprint name to search
+    - Enter manually
+    - Pick from list
+    Handles boards that do not support sprints (e.g., Kanban) gracefully.
+    Returns the selected sprint name.
+    Accepts board_id directly if available, otherwise looks up by board_name.
+    """
+    import requests
+    if not board_id:
+        if not board_name:
+            board_name = prompt_text("Enter board name:")
+        boards = jira.list_boards(name=board_name)
+        board_id = None
+        for b in boards:
+            if b.get('name') == board_name:
+                board_id = b.get('id')
+                break
+        if not board_id:
+            print(f"No board found with name '{board_name}'.")
+            return prompt_text("Enter sprint name:")
+    while True:
+        method = prompt_select(
+            "How would you like to select a sprint?",
+            choices=[
+                "Enter sprint name to search",
+                "Pick from list",
+                "Enter manually",
+                "Abort"
+            ],
+            default="Pick from list"
+        )
+        if method == "Enter sprint name to search":
+            search_term = prompt_text("Enter sprint name to search:")
+            if not search_term:
+                continue
+            try:
+                sprints = jira.list_sprints(board_id)
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 400:
+                    print("This board does not support sprints (likely a Kanban board) or you do not have permission. Aborting.")
+                    return None
+                else:
+                    print(f"Error fetching sprints: {e}")
+                    return None
+            except Exception as e:
+                print(f"Error fetching sprints: {e}")
+                return None
+            sprints = [s for s in sprints if search_term.lower() in s.get('name','').lower()]
+            if not sprints:
+                print("No sprints match your search.")
+                continue
+            choices = [f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})" for s in sprints]
+            picked = prompt_select("Select a sprint:", choices=choices + ["(Search again)"])
+            if picked == "(Search again)":
+                continue
+            for s in sprints:
+                label = f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})"
+                if picked == label:
+                    return s.get('name')
+        elif method == "Pick from list":
+            try:
+                sprints = jira.list_sprints(board_id)
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 400:
+                    print("This board does not support sprints (likely a Kanban board) or you do not have permission. Aborting.")
+                    return None
+                else:
+                    print(f"Error fetching sprints: {e}")
+                    return None
+            except Exception as e:
+                print(f"Error fetching sprints: {e}")
+                return None
+            if not sprints:
+                print("No sprints found for this board.")
+                continue
+            choices = [f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})" for s in sprints]
+            picked = prompt_select("Select a sprint:", choices=choices + ["(Abort)"])
+            if picked == "(Abort)":
+                return None
+            for s in sprints:
+                label = f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})"
+                if picked == label:
+                    return s.get('name')
+        elif method == "Enter manually":
+            return prompt_text("Enter sprint name:")
+        else:  # Abort
+            return None
+
+SELECT_MENU_STYLE = questionary.Style([
+    ("selected", "fg:#22bb22 bold"),  # Jungle green
+    ("pointer", "fg:#ffcc00 bold"),   # Yellow
+])
 
 # Add get_valid_project_key, get_valid_issue_type, get_valid_user, get_valid_field, get_valid_transition, select_account_id, select_property_key, search_issues here as well, with docstrings and type hints. 

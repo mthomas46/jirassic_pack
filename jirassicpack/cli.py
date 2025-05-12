@@ -7,7 +7,7 @@ from jirassicpack.config import ConfigLoader
 from jirassicpack.jira_client import JiraClient
 import questionary
 from typing import Any, Dict
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, error, info
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, error, info, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
 from jirassicpack.utils.logging import contextual_log, redact_sensitive
 from jirassicpack.utils.jira import select_jira_user, get_valid_project_key, get_valid_issue_type, get_valid_user, get_valid_field, get_valid_transition, select_account_id, select_property_key, search_issues
 from colorama import Fore, Style
@@ -24,6 +24,10 @@ import inspect
 from jirassicpack.log_monitoring import log_parser
 from jirassicpack.features.ticket_discussion_summary import ticket_discussion_summary
 from jirassicpack.features.test_local_llm import test_local_llm
+import subprocess
+import shutil
+import requests
+import threading
 
 load_dotenv()
 
@@ -201,6 +205,8 @@ FEATURE_GROUPS = {
     "Test Connection": [
         ("🧪 Test connection to Jira", "test_connection"),
         ("🦖 Test Local LLM", "test_local_llm"),
+        ("🦖 Start Local LLM Server", "start_local_llm_server"),
+        ("👀 Live Tail Local LLM Logs", "live_tail_local_llm_logs"),
     ],
     "Issues & Tasks": [
         ("📝 Create a new issue", "create_issue"),
@@ -248,14 +254,10 @@ FEATURE_GROUPS = {
 def feature_menu():
     group_names = list(FEATURE_GROUPS.keys())
     while True:
-        group = questionary.select(
+        group = prompt_select(
             "Select a feature group:",
-            choices=group_names,
-            style=questionary.Style([
-                ("selected", "fg:#22bb22 bold"),  # Jungle green
-                ("pointer", "fg:#ffcc00 bold"),   # Yellow
-            ])
-        ).ask()
+            choices=group_names
+        )
         contextual_log('info', f"🦖 [CLI] User selected feature group: {group}", operation="user_prompt", status="answered", params={"group": group}, extra={"feature": "cli"})
         if not group or group not in FEATURE_GROUPS:
             continue  # Defensive: skip invalid or None group
@@ -266,14 +268,10 @@ def feature_menu():
         while True:
             submenu_choices = [{"name": name, "value": value} for name, value in features]
             submenu_choices.append({"name": "⬅️ Return to previous menu", "value": "return_to_main_menu"})
-            feature = questionary.select(
+            feature = prompt_select(
                 f"Select a feature from '{group}':",
-                choices=submenu_choices,
-                style=questionary.Style([
-                    ("selected", "fg:#22bb22 bold"),
-                    ("pointer", "fg:#ffcc00 bold"),
-                ])
-            ).ask()
+                choices=submenu_choices
+            )
             contextual_log('info', f"🦖 [CLI] User selected feature: {feature}", operation="user_prompt", status="answered", params={"feature": feature}, extra={"feature": "cli"})
             if feature == "return_to_main_menu":
                 break  # Go back to group selection
@@ -312,13 +310,13 @@ def main() -> None:
         contextual_log('info', f"🦖 [CLI] Loaded config from {config_path or 'default'} for user {jira_conf.get('email')}", extra={"feature": "cli", "user": jira_conf.get('email'), "batch": None, "suffix": None})
         # Prompt for Jira credentials (shared by all features)
         if not jira_conf['url']:
-            jira_conf['url'] = questionary.text("Jira URL:", default=os.environ.get('JIRA_URL', 'https://your-domain.atlassian.net')).ask()
+            jira_conf['url'] = prompt_text("Jira URL:", default=os.environ.get('JIRA_URL', 'https://your-domain.atlassian.net'))
             contextual_log('info', "User prompted for Jira URL", operation="user_prompt", status="answered", params={"prompt": "Jira URL"}, extra={"feature": "cli"})
         if not jira_conf['email']:
-            jira_conf['email'] = questionary.text("Jira Email:", default=os.environ.get('JIRA_EMAIL', '')).ask()
+            jira_conf['email'] = prompt_text("Jira Email:", default=os.environ.get('JIRA_EMAIL', ''))
             contextual_log('info', "User prompted for Jira Email", operation="user_prompt", status="answered", params={"prompt": "Jira Email"}, extra={"feature": "cli"})
         if not jira_conf['api_token']:
-            jira_conf['api_token'] = questionary.password("Jira API Token:").ask()
+            jira_conf['api_token'] = prompt_password("Jira API Token:")
             contextual_log('info', "User prompted for Jira API Token", operation="user_prompt", status="answered", params={"prompt": "Jira API Token"}, extra={"feature": "cli"})
         with spinner("Connecting to Jira..."):
             contextual_log('info', f"🦖 [CLI] Connecting to Jira at {jira_conf['url']} as {jira_conf['email']}", extra={"feature": "cli", "user": jira_conf['email'], "batch": None, "suffix": None})
@@ -367,11 +365,13 @@ def main() -> None:
         halt_cli(f"Unhandled exception: {e}")
 
 def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str = None, batch_index: int = None, unique_suffix: str = None) -> None:
+    update_llm_menu()
     context = {"feature": feature, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
     contextual_log('debug', f"[DEBUG] run_feature called. feature={feature}, user_email={user_email}, batch_index={batch_index}, unique_suffix={unique_suffix}, options={options}", extra=context)
     menu_to_key = {
         "🧪 Test connection to Jira": "test_connection",
         "🦖 Test Local LLM": "test_local_llm",
+        "🦖 Start Local LLM Server": "start_local_llm_server",
         "👥 Output all users": "output_all_users",
         "📝 Create a new issue": "create_issue",
         "✏️ Update an existing issue": "update_issue",
@@ -395,6 +395,7 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         "🏷️ Output all user property keys": "output_all_user_property_keys",
         "🔎 Search issues": "search_issues",
         "📄 Ticket Discussion Summary": "ticket_discussion_summary",
+        "👀 Live Tail Local LLM Logs": "live_tail_local_llm_logs",
     }
     key = menu_to_key.get(feature, feature)
     context = {"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
@@ -420,23 +421,23 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             account_id = select_account_id(jira)
             # Prompt for email using a user search helper, or allow manual entry
             email = None
-            search_email = questionary.confirm("Would you like to search for a user to fill in the email?", default=True).ask()
+            search_email = prompt_checkbox("Would you like to search for a user to fill in the email?", default=True)
             if search_email:
                 users = jira.search_users("")
                 email_choices = [u.get('emailAddress') for u in users if u.get('emailAddress')]
                 if email_choices:
-                    picked = questionary.select("Select an email:", choices=email_choices + ["(Enter manually)"]).ask()
+                    picked = prompt_select("Select an email:", choices=email_choices + ["(Enter manually)"])
                     if picked == "(Enter manually)":
-                        email = questionary.text("Enter email (leave blank if not used):").ask()
+                        email = prompt_text("Enter email (leave blank if not used):")
                     else:
                         email = picked
                 else:
-                    email = questionary.text("Enter email (leave blank if not used):").ask()
+                    email = prompt_text("Enter email (leave blank if not used):")
             else:
-                email = questionary.text("Enter email (leave blank if not used):").ask()
+                email = prompt_text("Enter email (leave blank if not used):")
             # Prompt for username and user key, but allow skipping
-            username = questionary.text("Username (leave blank if not used):").ask()
-            key_ = questionary.text("User key (leave blank if not used):").ask()
+            username = prompt_text("Username (leave blank if not used):")
+            key_ = prompt_text("User key (leave blank if not used):")
             result = jira.get_user(account_id=account_id or None, email=email or None, username=username or None, key=key_ or None)
             if not result:
                 info("Aborted: No user found with provided details.")
@@ -448,7 +449,7 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         return
     if key == "search_users":
         try:
-            query = questionary.text("Search query (name/email):").ask()
+            query = prompt_text("Search query (name/email):")
             contextual_log('info', f"🦖 [CLI] User searched users with query: {query}", extra=context)
             result = jira.search_users(query=query)
             if not result:
@@ -461,8 +462,8 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         return
     if key == "search_users_by_displayname_email":
         try:
-            displayname = questionary.text("Display name (leave blank if not used):").ask()
-            email = questionary.text("Email (leave blank if not used):").ask()
+            displayname = prompt_text("Display name (leave blank if not used):")
+            email = prompt_text("Email (leave blank if not used):")
             params = {}
             if displayname:
                 params['query'] = displayname
@@ -539,6 +540,18 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         except Exception as e:
             error(f"🦖 Error searching issues: {e}", extra=context)
             contextual_log('error', f"🦖 [CLI] Error searching issues: {e}", exc_info=True, extra=context)
+        return
+    if key == "start_local_llm_server":
+        start_local_llm_server()
+        return
+    if key == "stop_local_llm_server":
+        stop_local_llm_server()
+        return
+    if key == "view_local_llm_logs":
+        view_local_llm_logs()
+        return
+    if key == "live_tail_local_llm_logs":
+        live_tail_local_llm_logs()
         return
     # Only now check for FEATURE_REGISTRY
     if key not in FEATURE_REGISTRY:
@@ -675,6 +688,211 @@ def halt_cli(reason=None):
     print(f"{DANGER_RED}{msg}{RESET}")
     contextual_log('warning', msg, extra={"feature": "cli"})
     sys.exit(0)
+
+# Helper to check if a process is running (basic check)
+def is_process_running(process_name):
+    try:
+        import psutil
+    except ImportError:
+        print("[ERROR] The 'psutil' package is required for process management. Please install it with 'pip install psutil'.")
+        return False
+    for proc in psutil.process_iter(['name', 'cmdline']):
+        try:
+            if process_name in ' '.join(proc.info['cmdline']):
+                return True
+        except Exception:
+            continue
+    return False
+
+def get_llm_status():
+    try:
+        import psutil
+    except ImportError:
+        return '🔴 (psutil not installed)'
+    ollama_running = is_process_running('ollama')
+    http_api_running = is_process_running('http_api.py')
+    if ollama_running and http_api_running:
+        return '🟢'
+    return '🔴'
+
+# Update menu with status indicator
+def update_llm_menu():
+    status = get_llm_status()
+    FEATURE_GROUPS["Test Connection"] = [
+        ("🧪 Test connection to Jira", "test_connection"),
+        (f"🦖 Start Local LLM Server {status}", "start_local_llm_server"),
+        ("🛑 Stop Local LLM Server", "stop_local_llm_server"),
+        ("🪵 View Local LLM Logs", "view_local_llm_logs"),
+        ("🦖 Test Local LLM", "test_local_llm"),
+        ("👀 Live Tail Local LLM Logs", "live_tail_local_llm_logs"),
+    ]
+
+update_llm_menu()
+
+def start_local_llm_server():
+    print("🦖 Starting local LLM server...")
+    if not shutil.which("ollama"):
+        print("[ERROR] 'ollama' is not installed or not in PATH.")
+        return
+    if not is_process_running("ollama"): 
+        try:
+            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("Started 'ollama serve' in the background.")
+        except Exception as e:
+            print(f"[ERROR] Failed to start 'ollama serve': {e}")
+    else:
+        print("'ollama serve' is already running.")
+    import os
+    ollama_dir = os.path.abspath(os.path.join(os.getcwd(), "../Ollama7BPoc"))
+    http_api_path = os.path.join(ollama_dir, "http_api.py")
+    if not os.path.exists(http_api_path):
+        print(f"[ERROR] Could not find http_api.py at {http_api_path}")
+        return
+    if not is_process_running("http_api.py"):
+        try:
+            subprocess.Popen(["python", http_api_path], cwd=ollama_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("Started 'http_api.py' in the background.")
+        except Exception as e:
+            print(f"[ERROR] Failed to start 'http_api.py': {e}")
+    else:
+        print("'http_api.py' is already running.")
+    # Health check
+    print("Checking local LLM health endpoint...")
+    try:
+        for _ in range(10):
+            try:
+                resp = requests.get("http://localhost:5000/health", timeout=2)
+                if resp.status_code == 200 and resp.json().get("status") == "ok":
+                    print("🟢 Local LLM health check passed!")
+                    break
+                else:
+                    print("[WARN] Health endpoint returned non-ok status.")
+            except Exception:
+                print("[INFO] Waiting for local LLM to become healthy...")
+                time.sleep(1)
+        else:
+            print("[ERROR] Local LLM health check failed after waiting.")
+    except Exception as e:
+        print(f"[ERROR] Health check error: {e}")
+    print("🦖 Local LLM server startup attempted. Use 'Test Local LLM' to verify health.")
+
+def stop_local_llm_server():
+    print("🛑 Stopping local LLM server...")
+    try:
+        import psutil
+    except ImportError:
+        print("[ERROR] The 'psutil' package is required for process management. Please install it with 'pip install psutil'.")
+        return
+    stopped = False
+    for proc in psutil.process_iter(['name', 'cmdline']):
+        try:
+            cmd = ' '.join(proc.info['cmdline'])
+            if 'ollama' in cmd or 'http_api.py' in cmd:
+                proc.terminate()
+                stopped = True
+        except Exception:
+            continue
+    if stopped:
+        print("🛑 Local LLM server processes terminated.")
+    else:
+        print("No local LLM server processes found to stop.")
+
+def view_local_llm_logs():
+    import os
+    ollama_log = os.path.expanduser("~/.ollama/ollama.log")
+    ollama_dir = os.path.abspath(os.path.join(os.getcwd(), "../Ollama7BPoc"))
+    http_api_log = os.path.join(ollama_dir, "llm_api.log")
+    print("--- ollama.log (last 20 lines) ---")
+    if os.path.exists(ollama_log):
+        with open(ollama_log) as f:
+            lines = f.readlines()
+            print(''.join(lines[-20:]))
+    else:
+        print("No ollama.log found.")
+    print("--- http_api.log (last 20 lines) ---")
+    if os.path.exists(http_api_log):
+        with open(http_api_log) as f:
+            lines = f.readlines()
+            print(''.join(lines[-20:]))
+    else:
+        print("No http_api.log found.")
+
+def live_tail_file(filepath, label):
+    import os
+    import sys
+    import time
+    print(f"--- {label} (live tail, Ctrl+C to exit) ---")
+    last_inode = None
+    try:
+        while True:
+            try:
+                if not os.path.exists(filepath):
+                    print(f"No {label} found at {filepath}. Retrying in 2s...")
+                    time.sleep(2)
+                    continue
+                with open(filepath, 'r') as f:
+                    f.seek(0, os.SEEK_END)
+                    last_inode = os.fstat(f.fileno()).st_ino
+                    while True:
+                        line = f.readline()
+                        if line:
+                            print(line, end='')
+                        else:
+                            time.sleep(0.5)
+                            # Check for log rotation/truncation
+                            try:
+                                if os.stat(filepath).st_ino != last_inode:
+                                    print(f"\n[INFO] {label} was rotated or truncated. Re-opening...")
+                                    break
+                            except Exception:
+                                break
+            except PermissionError:
+                print(f"[ERROR] Permission denied for {label} at {filepath}. Retrying in 2s...")
+                time.sleep(2)
+                continue
+            except FileNotFoundError:
+                print(f"[ERROR] {label} not found at {filepath}. Retrying in 2s...")
+                time.sleep(2)
+                continue
+            except Exception as e:
+                print(f"[ERROR] Unexpected error tailing {label}: {e}. Retrying in 2s...")
+                time.sleep(2)
+                continue
+    except KeyboardInterrupt:
+        print(f"\nStopped tailing {label}.")
+    except Exception as e:
+        print(f"[ERROR] Fatal error in tailing {label}: {e}")
+
+def live_tail_local_llm_logs():
+    import os
+    ollama_log = os.path.expanduser("~/.ollama/ollama.log")
+    ollama_dir = os.path.abspath(os.path.join(os.getcwd(), "../Ollama7BPoc"))
+    http_api_log = os.path.join(ollama_dir, "llm_api.log")
+    threads = []
+    stop_event = threading.Event()
+    def tail1():
+        try:
+            live_tail_file(ollama_log, "ollama.log")
+        except Exception as e:
+            print(f"[ERROR] ollama.log tailing thread: {e}")
+    def tail2():
+        try:
+            live_tail_file(http_api_log, "http_api.log")
+        except Exception as e:
+            print(f"[ERROR] http_api.log tailing thread: {e}")
+    print("Tailing both ollama.log and http_api.log. Press Ctrl+C to stop.")
+    t1 = threading.Thread(target=tail1, daemon=True)
+    t2 = threading.Thread(target=tail2, daemon=True)
+    t1.start()
+    t2.start()
+    try:
+        while t1.is_alive() or t2.is_alive():
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\nStopped live tailing logs.")
+        stop_event.set()
+    except Exception as e:
+        print(f"[ERROR] Fatal error in live tailing logs: {e}")
 
 if __name__ == "__main__":
     main() 

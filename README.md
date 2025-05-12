@@ -36,6 +36,7 @@ JIRASSIC PACK
 - [Glossary](#glossary)
 - [Contributing](#contributing)
 - [License](#license)
+- [Local LLM Integration: Using Jirassic Pack with Ollama7BPoc](#local-llm-integration-using-jirassic-pack-with-ollama7bpoc)
 
 ---
 
@@ -808,5 +809,45 @@ def my_feature(jira, params, ...):
 ```
 
 **This pattern is enforced for all features.**
+
+## Local LLM Integration: Using Jirassic Pack with Ollama7BPoc
+
+To enable local code analysis and technical summaries, Jirassic Pack can work in tandem with a local LLM server (such as Code Llama via Ollama7BPoc).
+
+### How it Works
+- The local LLM project (`../Ollama7BPoc`) exposes HTTP endpoints for text, file, and GitHub PR analysis.
+- Jirassic Pack routes code/PR analysis and technical summary features to these endpoints when configured.
+- All other summaries (e.g., general ticket summaries) use OpenAI by default.
+
+### Running Both Projects Together
+
+You can use the following script to start both the local LLM server and Jirassic Pack (run in separate terminals or as background processes):
+
+```bash
+# Start the Ollama LLM server (Terminal 1)
+ollama serve &
+
+# Start the local LLM HTTP API (Terminal 2)
+cd ../Ollama7BPoc
+pip install -r requirements.txt
+python http_api.py &
+
+# Start Jirassic Pack CLI (Terminal 3)
+cd ../jirassicPack
+pip install -r requirements.txt
+python -m jirassicpack.cli
+```
+
+> **Note:** You can also create a shell script (e.g., `start_local_llm_and_jirassic.sh`) to automate these steps.
+
+### Can This Be Run from the Main Menu?
+Currently, starting the local LLM server (`ollama serve` and `python http_api.py`) must be done manually or via a shell script. However, adding a "Start Local LLM Server" option to the Jirassic Pack main menu is a possible future enhancement. This would allow you to launch the local LLM server directly from the CLI for even smoother integration.
+
+### What Happens
+- When you use features like code/PR analysis or technical summaries, Jirassic Pack sends requests to the local LLM API (e.g., `http://localhost:5000/generate/text`).
+- The local LLM (Ollama7BPoc) processes the request and returns the result to Jirassic Pack.
+- This allows you to use a local, private LLM for code analysis, while still using OpenAI for other summaries.
+
+See the `jirassicpack/features/ticket_discussion_summary.py` and `jirassicpack/features/test_local_llm.py` for example usage and integration points.
 
 --- 

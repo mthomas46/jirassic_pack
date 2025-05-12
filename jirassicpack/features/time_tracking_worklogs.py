@@ -2,13 +2,12 @@
 # This feature summarizes worklogs for a given Jira user and timeframe.
 # It prompts for user, start/end dates, fetches issues with worklogs, and outputs a Markdown report with worklog details per issue.
 
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info, prompt_with_validation, validate_required, validate_date, error, spinner, info_spared_no_expense, safe_get, write_markdown_file, require_param, render_markdown_report, get_option
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info, prompt_with_validation, validate_required, validate_date, error, spinner, info_spared_no_expense, safe_get, write_markdown_file, require_param, render_markdown_report, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user, get_valid_project_key, get_valid_issue_type, get_valid_user, get_valid_field, get_valid_transition, select_account_id, select_property_key, search_issues
 from datetime import datetime
 from typing import Any, Dict, List
 import time
-import questionary
 import os
 
 # Module-level cache for Jira users
@@ -47,7 +46,7 @@ def select_jira_user(jira, allow_multiple=False, default_user=None):
     # Single-user mode
     if not allow_multiple:
         while True:
-            method = questionary.select(
+            method = prompt_select(
                 "How would you like to select the user?",
                 choices=[
                     "Search for a user",
@@ -56,9 +55,9 @@ def select_jira_user(jira, allow_multiple=False, default_user=None):
                     "Abort"
                 ],
                 default="Pick from list"
-            ).ask()
+            )
             if method == "Search for a user":
-                search_term = questionary.text("Enter name or email to search:").ask()
+                search_term = prompt_text("Enter name or email to search:")
                 matches = [
                     (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
                     for u in filtered_users
@@ -67,14 +66,14 @@ def select_jira_user(jira, allow_multiple=False, default_user=None):
                 if not matches:
                     info("No users found matching your search.")
                     continue
-                picked_label = questionary.select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"]).ask()
+                picked_label = prompt_select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"])
                 if picked_label == "(Cancel)":
                     continue
                 picked = next((m for m in matches if m[0] == picked_label), None)
                 if picked:
                     return picked
             elif method == "Pick from list":
-                picked_label = questionary.select("Select a user:", choices=[c[0] for c in user_choices] + ["(Cancel)"]).ask()
+                picked_label = prompt_select("Select a user:", choices=[c[0] for c in user_choices] + ["(Cancel)"])
                 if picked_label == "(Cancel)":
                     continue
                 picked = next((c for c in user_choices if c[0] == picked_label), None)
@@ -97,7 +96,7 @@ def select_jira_user(jira, allow_multiple=False, default_user=None):
     while True:
         if users:
             info(f"Currently selected user(s):\n- " + "\n- ".join([u[0] for u in users]))
-        method = questionary.select(
+        method = prompt_select(
             "How would you like to select users? (multi-select mode)",
             choices=[
                 "Search for a user",
@@ -108,9 +107,9 @@ def select_jira_user(jira, allow_multiple=False, default_user=None):
                 "Abort"
             ],
             default="Pick from list"
-        ).ask()
+        )
         if method == "Search for a user":
-            search_term = questionary.text("Enter name or email to search:").ask()
+            search_term = prompt_text("Enter name or email to search:")
             matches = [
                 (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
                 for u in filtered_users
@@ -119,14 +118,14 @@ def select_jira_user(jira, allow_multiple=False, default_user=None):
             if not matches:
                 info("No users found matching your search.")
                 continue
-            picked_label = questionary.select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"]).ask()
+            picked_label = prompt_select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"])
             if picked_label == "(Cancel)":
                 continue
             picked = next((m for m in matches if m[0] == picked_label), None)
             if picked and picked not in users:
                 users.append(picked)
         elif method == "Pick from list":
-            picked_label = questionary.select("Select a user:", choices=[c[0] for c in user_choices] + ["(Done)"]).ask()
+            picked_label = prompt_select("Select a user:", choices=[c[0] for c in user_choices] + ["(Done)"])
             if picked_label == "(Done)":
                 break
             picked = next((c for c in user_choices if c[0] == picked_label), None)
@@ -155,13 +154,18 @@ def prompt_time_tracking_options(opts: Dict[str, Any], jira=None) -> Dict[str, A
     """
     Prompt for time tracking options using Jira-aware helpers for user selection.
     Always prompt for user, using config/environment value as default.
+    Uses email address if available, otherwise accountId.
     """
     config_user = opts.get('user') or os.environ.get('JIRA_USER')
     user_obj = None
     if jira:
         info("Please select a Jira user for time tracking and worklogs.")
         label, user_obj = select_jira_user(jira, default_user=config_user)
-        usr = user_obj.get('accountId') if user_obj else ''
+        # Prefer email address for JQL, fallback to accountId
+        if user_obj:
+            usr = user_obj.get('emailAddress') or user_obj.get('accountId') or ''
+        else:
+            usr = ''
         if not usr:
             info("Aborted user selection for time tracking and worklogs.")
             return None
@@ -266,6 +270,10 @@ def time_tracking_worklogs(jira: Any, params: Dict[str, Any], user_email=None, b
             f"AND worklogDate >= '{start_date}' "
             f"AND worklogDate <= '{end_date}'"
         )
+        info(f"[DEBUG] Using JQL: {jql}")
+        info(f"[DEBUG] Using user: {user}")
+        contextual_log('debug', f"[DEBUG] Using JQL: {jql}", extra=context, feature='time_tracking_worklogs')
+        contextual_log('debug', f"[DEBUG] Using user: {user}", extra=context, feature='time_tracking_worklogs')
         def do_worklogs():
             with spinner("⏳ Running Time Tracking Worklogs..."):
                 issues = jira.search_issues(jql, fields=["worklog", "key", "summary"], max_results=100)
