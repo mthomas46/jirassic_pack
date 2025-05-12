@@ -11,6 +11,8 @@ from statistics import mean, median
 import logging
 import time
 import questionary
+import os
+from jirassicpack.features.time_tracking_worklogs import select_jira_user
 
 logger = logging.getLogger(__name__)
 
@@ -19,94 +21,23 @@ _CACHED_JIRA_USERS = None
 
 def prompt_user_team_analytics_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
-    Prompt for user/team analytics options, always prompting for team member selection (no default to current user).
+    Prompt for user/team analytics options, always requiring explicit team member selection. Config/env value is only used if the user selects it.
     """
-    global _CACHED_JIRA_USERS
-    team = opts.get('team')
+    info(f"[DEBUG] prompt_user_team_analytics_options called. jira is {'present' if jira else 'None'}. opts: {opts}")
+    config_team = opts.get('team') or os.environ.get('JIRA_TEAM')
+    team = None
     users = []
     if not team and jira:
-        # --- Fetch all users with pagination, but only once ---
-        if _CACHED_JIRA_USERS is None:
-            all_jira_users = []
-            start_at = 0
-            max_results = 1000
-            while True:
-                batch = jira.search_users("", start_at=start_at, max_results=max_results)
-                if not batch:
-                    break
-                all_jira_users.extend(batch)
-                if len(batch) < max_results:
-                    break
-                start_at += max_results
-            _CACHED_JIRA_USERS = all_jira_users
-        else:
-            all_jira_users = _CACHED_JIRA_USERS
-        filtered_users = [u for u in all_jira_users if u.get('emailAddress')]
-        user_choices = sorted([
-            f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>"
-            for u in filtered_users
-        ])
-        # --- Submenu for team member selection ---
         info("Please select Jira team members for analytics.")
-        while True:
-            if users:
-                info(f"Currently selected team members:\n- " + "\n- ".join(users))
-            method = questionary.select(
-                "How would you like to add a team member?",
-                choices=[
-                    "Search for a user",
-                    "Pick from list",
-                    "Use current user",
-                    "Clear selected members",
-                    "Done",
-                    "Abort"
-                ],
-                default="Pick from list"
-            ).ask()
-            if method == "Search for a user":
-                search_term = questionary.text("Enter name or email to search:").ask()
-                matches = [
-                    f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>"
-                    for u in filtered_users
-                    if search_term.lower() in (u.get('displayName','').lower() + u.get('emailAddress','').lower())
-                ]
-                if not matches:
-                    info("No users found matching your search.")
-                    continue
-                picked = questionary.select("Select a team member:", choices=matches + ["(Cancel)", "(Abort)"]).ask()
-                if picked == "(Cancel)":
-                    continue
-                if picked == "(Abort)":
-                    info("Aborted team member selection.")
-                    return None
-                if picked and picked not in users:
-                    users.append(picked)
-            elif method == "Pick from list":
-                picked = questionary.select("Select a team member:", choices=user_choices + ["(Done)", "(Abort)"]).ask()
-                if picked == "(Done)":
-                    break
-                if picked == "(Abort)":
-                    info("Aborted team member selection.")
-                    return None
-                if picked and picked not in users:
-                    users.append(picked)
-            elif method == "Use current user":
-                try:
-                    me = jira.get_current_user()
-                    current_user = f"{me.get('displayName','?')} <{me.get('emailAddress','?')}>"
-                    if current_user not in users:
-                        users.append(current_user)
-                    info(f"Added current user: {current_user}")
-                except Exception:
-                    info("Could not retrieve current user from Jira.")
-            elif method == "Clear selected members":
-                users.clear()
-                info("Cleared all selected team members.")
-            elif method == "Abort":
-                info("Aborted team member selection.")
-                return None
-            else:  # Done
-                break
+        label_user_tuples = select_jira_user(jira, allow_multiple=True)
+        if not label_user_tuples:
+            info("Aborted team member selection.")
+            return None
+        # Use accountId for each user
+        users = [user_obj.get('accountId') for label, user_obj in label_user_tuples if user_obj and user_obj.get('accountId')]
+        if not users:
+            info("No valid users selected for team analytics.")
+            return None
         team = ','.join(users)
     elif not team:
         team = get_option(opts, 'team', prompt="Team members (comma-separated usernames):", required=True)
@@ -138,10 +69,10 @@ def write_team_analytics_file(filename: str, start_date: str, end_date: str, wor
                 min_user = min(workload, key=workload.get)
                 f.write(f"\n**Most loaded:** {max_user} ({workload[max_user]} issues)\n")
                 f.write(f"**Least loaded:** {min_user} ({workload[min_user]} issues)\n")
-        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context)
+        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='user_team_analytics')
     except Exception as e:
-        contextual_log('error', f"Failed to write team analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context)
-        error(f"Failed to write team analytics file: {e}", extra=context)
+        contextual_log('error', f"Failed to write team analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context, feature='user_team_analytics')
+        error(f"Failed to write team analytics file: {e}", extra=context, feature='user_team_analytics')
 
 def generate_analytics(issues: List[Dict[str, Any]]) -> Dict[str, int]:
     """
@@ -168,36 +99,36 @@ def write_analytics_file(filename: str, analytics: Dict[str, int], user_email=No
                 min_user = min(analytics, key=analytics.get)
                 f.write(f"\n**Most loaded:** {max_user} ({analytics[max_user]} issues)\n")
                 f.write(f"**Least loaded:** {min_user} ({analytics[min_user]} issues)\n")
-        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context)
+        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='user_team_analytics')
     except Exception as e:
-        contextual_log('error', f"Failed to write analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context)
-        error(f"Failed to write analytics file: {e}", extra=context)
+        contextual_log('error', f"Failed to write analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context, feature='user_team_analytics')
+        error(f"Failed to write analytics file: {e}", extra=context, feature='user_team_analytics')
 
 def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
     correlation_id = params.get('correlation_id')
     context = build_context("user_team_analytics", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()
     try:
-        contextual_log('info', f"🧬 [user_team_analytics] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=redact_sensitive(params), status="started", extra=context)
+        contextual_log('info', f"🧬 [User/Team Analytics] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='user_team_analytics')
         orig_search_issues = getattr(jira, 'search_issues', None)
         if orig_search_issues:
             def log_search_issues(*args, **kwargs):
-                contextual_log('debug', f"Jira search_issues: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context)
+                contextual_log('debug', f"Jira search_issues: args={args}, kwargs={redact_sensitive(kwargs)}", extra=context, feature='user_team_analytics')
                 resp = orig_search_issues(*args, **kwargs)
-                contextual_log('debug', f"Jira search_issues response: {resp}", extra=context)
+                contextual_log('debug', f"Jira search_issues response: {resp}", extra=context, feature='user_team_analytics')
                 return resp
             jira.search_issues = log_search_issues
         team = params.get('team')
         if not team:
-            error("team is required.", extra=context)
+            error("team is required.", extra=context, feature='user_team_analytics')
             return
         start_date = params.get('start_date')
         if not start_date:
-            error("start_date is required.", extra=context)
+            error("start_date is required.", extra=context, feature='user_team_analytics')
             return
         end_date = params.get('end_date')
         if not end_date:
-            error("end_date is required.", extra=context)
+            error("end_date is required.", extra=context, feature='user_team_analytics')
             return
         output_dir = params.get('output_dir', 'output')
         unique_suffix = params.get('unique_suffix', '')
@@ -376,8 +307,8 @@ def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batc
             for r, c in reporters.items():
                 team_stats["reporters"][r] = team_stats["reporters"].get(r, 0) + c
         if not any(len(data["issues"]) for data in all_user_data.values()):
-            info("🦖 See, Nobody Cares. No analytics data found.", extra=context)
-            contextual_log('info', "🦖 See, Nobody Cares. No analytics data found.", extra=context)
+            info("🦖 See, Nobody Cares. No analytics data found.", extra=context, feature='user_team_analytics')
+            contextual_log('info', "🦖 See, Nobody Cares. No analytics data found.", extra=context, feature='user_team_analytics')
             return
         # Write expanded analytics to Markdown
         filename = f"{output_dir}/user_team_analytics{unique_suffix}.md"
@@ -458,21 +389,21 @@ def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batc
             )
             with open(filename, 'w') as f:
                 f.write(content)
-            contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context)
-            info(f"🧬 User/team analytics written to {filename}", extra=context)
+            contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='user_team_analytics')
+            info(f"🧬 User/team analytics written to {filename}", extra=context, feature='user_team_analytics')
             duration = int((time.time() - start_time) * 1000)
-            contextual_log('info', f"🧬 [user_team_analytics] Feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context)
+            contextual_log('info', f"🧬 [User/Team Analytics] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}). Duration: {duration}ms.", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='user_team_analytics')
         except Exception as e:
-            contextual_log('error', f"Failed to write analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context)
-            error(f"Failed to write analytics file: {e}", extra=context)
-            contextual_log('error', f"[user_team_analytics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", extra=context)
+            contextual_log('error', f"Failed to write analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context, feature='user_team_analytics')
+            error(f"Failed to write analytics file: {e}", extra=context, feature='user_team_analytics')
+            contextual_log('error', f"[User/Team Analytics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", extra=context, feature='user_team_analytics')
         celebrate_success()
         info_spared_no_expense()
-        info(f"🧬 User/team analytics written to {filename}", extra=context)
+        info(f"🧬 User/team analytics written to {filename}", extra=context, feature='user_team_analytics')
     except KeyboardInterrupt:
-        contextual_log('warning', "[user_team_analytics] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context)
-        info("Graceful exit from User & Team Analytics feature.", extra=context)
+        contextual_log('warning', "🧬 [User/Team Analytics] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context, feature='user_team_analytics')
+        info("Graceful exit from User & Team Analytics feature.", extra=context, feature='user_team_analytics')
     except Exception as e:
-        contextual_log('error', f"[user_team_analytics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
-        error(f"[user_team_analytics] Exception: {e}", extra=context)
+        contextual_log('error', f"🧬 [User/Team Analytics] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='user_team_analytics')
+        error(f"🧬 [User/Team Analytics] Exception: {e}", extra=context, feature='user_team_analytics')
         raise 

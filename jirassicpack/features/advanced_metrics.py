@@ -51,7 +51,7 @@ def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_i
     start_time = time.time()
     try:
         # Enhanced feature entry log
-        contextual_log('info', f"📊 [advanced_metrics] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=redact_sensitive(params), status="started", extra=context)
+        contextual_log('info', f"📊 [Advanced Metrics] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
         if not require_param(params, 'user', context):
             return
         if not require_param(params, 'start_date', context):
@@ -76,8 +76,8 @@ def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_i
             with spinner("📊 Running Advanced Metrics..."):
                 issues = jira.search_issues(jql, fields=fields, max_results=200, context=context)
         except Exception as e:
-            error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
-            logger.error(f"[advanced_metrics] Failed to fetch issues: {e}", exc_info=True, extra=context)
+            contextual_log('error', f"📊 [Advanced Metrics] Failed to fetch issues: {e}", exc_info=True, operation="api_call", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
+            error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context, feature='advanced_metrics')
             return
         # --- Analytics Aggregation ---
         cycle_times = []
@@ -273,14 +273,14 @@ def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_i
         with open(filename, 'w') as f:
             f.write(content)
         # Enhanced output file write log
-        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context)
+        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='advanced_metrics')
         # Enhanced feature end log
         duration = int((time.time() - start_time) * 1000)
-        contextual_log('info', f"📊 [advanced_metrics] Feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context)
+        contextual_log('info', f"📊 [advanced_metrics] Feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='advanced_metrics')
     except KeyboardInterrupt:
-        contextual_log('warning', "[advanced_metrics] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context)
-        info("Graceful exit from Advanced Metrics feature.", extra=context)
+        contextual_log('warning', "[advanced_metrics] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
+        info("Graceful exit from Advanced Metrics feature.", extra=context, feature='advanced_metrics')
     except Exception as e:
-        contextual_log('error', f"[advanced_metrics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
-        error(f"[advanced_metrics] Exception: {e}", extra=context)
+        contextual_log('error', f"[advanced_metrics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
+        error(f"[advanced_metrics] Exception: {e}", extra=context, feature='advanced_metrics')
         raise 

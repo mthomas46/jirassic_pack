@@ -57,9 +57,9 @@ def write_automated_doc_file(filename: str, doc_type: str, issues: list, user_em
         )
         with open(filename, 'w') as f:
             f.write(content)
-        contextual_log('info', f"📄 Automated documentation written to {filename}", operation="output_write", output_file=filename, status="success", extra=context)
+        contextual_log('info', f"📄 Automated documentation written to {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='automated_documentation')
     except Exception as e:
-        error(f"Failed to write automated documentation file: {e}", extra=context)
+        error(f"Failed to write automated documentation file: {e}", extra=context, feature='automated_documentation')
 
 def generate_documentation(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -74,7 +74,7 @@ def automated_documentation(jira: Any, params: dict, user_email=None, batch_inde
     context = build_context("automated_documentation", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()
     try:
-        contextual_log('info', f"📄 [automated_documentation] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=redact_sensitive(params), status="started", extra=context)
+        contextual_log('info', f"📚 [Automated Documentation] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='automated_documentation')
         if not require_param(params, 'doc_type', context):
             return
         if not require_param(params, 'project', context):
@@ -98,6 +98,7 @@ def automated_documentation(jira: Any, params: dict, user_email=None, batch_inde
         try:
             issues = retry_or_skip("Fetching issues for documentation", do_search)
         except Exception as e:
+            error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context, feature='automated_documentation')
             error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
             contextual_log('error', f"[automated_documentation] Failed to fetch issues: {e}", exc_info=True, extra=context)
             return
@@ -109,11 +110,11 @@ def automated_documentation(jira: Any, params: dict, user_email=None, batch_inde
         celebrate_success()
         info_spared_no_expense()
         contextual_log('info', f"📄 Automated documentation written to {filename}", operation="output_write", output_file=filename, status="success", extra=context)
-        contextual_log('info', f"📄 Automated documentation feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=int((time.time() - start_time) * 1000), params=redact_sensitive(params), extra=context)
+        contextual_log('info', f"📚 [Automated Documentation] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}).", operation="feature_end", status="success", params=redact_sensitive(params), extra=context)
     except KeyboardInterrupt:
         contextual_log('warning', "[automated_documentation] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context)
         info("Graceful exit from Automated Documentation feature.", extra=context)
     except Exception as e:
-        contextual_log('error', f"[automated_documentation] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
+        contextual_log('error', f"📚 [Automated Documentation] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
         error(f"[automated_documentation] Exception: {e}", extra=context)
         raise 

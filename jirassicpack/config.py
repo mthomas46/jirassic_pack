@@ -1,5 +1,6 @@
 import os
 import yaml
+from jirassicpack.utils import redact_sensitive, contextual_log
 
 class ConfigLoader:
     """
@@ -85,4 +86,14 @@ class ConfigLoader:
             for feat in self.config['features']:
                 if feat.get('name') == feature_name:
                     options.update(feat.get('options', {}))
-        return options 
+        return options
+
+    def contextual_log(self, operation, params, context):
+        contextual_log('info', f"⚙️ [Config] Starting config operation '{operation}' with params: {redact_sensitive(params)}", operation=operation, params=redact_sensitive(params), extra=context)
+        try:
+            result = getattr(self, operation)(params)
+            contextual_log('info', f"⚙️ [Config] Config operation '{operation}' completed successfully.", operation=operation, status="success", params=redact_sensitive(params), extra=context)
+            return result
+        except Exception as e:
+            contextual_log('error', f"⚙️ [Config] Exception occurred during config operation '{operation}': {e}", exc_info=True, operation=operation, error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
+            raise 

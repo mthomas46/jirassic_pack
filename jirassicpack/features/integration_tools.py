@@ -37,9 +37,9 @@ def write_integration_links_file(filename: str, pr_links: list, user_email=None,
         with open(filename, 'w') as f:
             f.write(content)
         info(f"🔗 Integration links written to {filename}", extra=context)
-        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context)
+        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='integration_tools')
     except Exception as e:
-        error(f"Failed to write integration links file: {e}", extra=context)
+        error(f"Failed to write integration links file: {e}", extra=context, feature='integration_tools')
 
 def generate_integration_links(issues: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
     """
@@ -63,7 +63,7 @@ def integration_tools(jira: Any, params: Dict[str, Any], user_email=None, batch_
     context = build_context("integration_tools", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()
     try:
-        contextual_log('info', f"🦖 [integration_tools] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=redact_sensitive(params), status="started", extra=context)
+        contextual_log('info', f"🔗 [Integration Tools] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='integration_tools')
         if not require_param(params, 'integration_jql', context):
             return
         jql = params.get('integration_jql')
@@ -76,26 +76,26 @@ def integration_tools(jira: Any, params: Dict[str, Any], user_email=None, batch_
         try:
             issues = retry_or_skip("Fetching issues for integration tools", do_search)
         except Exception as e:
-            error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
-            contextual_log('error', f"[integration_tools] Failed to fetch issues: {e}", exc_info=True, extra=context)
+            error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context, feature='integration_tools')
+            contextual_log('error', f"[integration_tools] Failed to fetch issues: {e}", exc_info=True, extra=context, feature='integration_tools')
             return
         if not issues:
-            info("🦖 See, Nobody Cares. No issues found for integration links.", extra=context)
+            info("🦖 See, Nobody Cares. No issues found for integration links.", extra=context, feature='integration_tools')
             return
         links = generate_integration_links(issues)
         if not links:
-            info("🦖 See, Nobody Cares. No integration links found.", extra=context)
+            info("🦖 See, Nobody Cares. No integration links found.", extra=context, feature='integration_tools')
             return
         filename = f"{output_dir}/integration_links{unique_suffix}.md"
         write_integration_links_file(filename, links, user_email, batch_index, unique_suffix, context)
         celebrate_success()
         info_spared_no_expense()
         duration = int((time.time() - start_time) * 1000)
-        contextual_log('info', f"🦖 [integration_tools] Feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context)
+        contextual_log('info', f"🔗 [Integration Tools] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}).", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='integration_tools')
     except KeyboardInterrupt:
-        contextual_log('warning', "[integration_tools] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context)
-        info("Graceful exit from Integration Tools feature.", extra=context)
+        contextual_log('warning', "[integration_tools] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context, feature='integration_tools')
+        info("Graceful exit from Integration Tools feature.", extra=context, feature='integration_tools')
     except Exception as e:
-        contextual_log('error', f"[integration_tools] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
-        error(f"[integration_tools] Exception: {e}", extra=context)
+        contextual_log('error', f"�� [Integration Tools] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='integration_tools')
+        error(f"[integration_tools] Exception: {e}", extra=context, feature='integration_tools')
         raise 
