@@ -22,4 +22,7 @@ ENV/
 config.yaml
 .env
 !.env.example
-!example.env 
+!example.env
+
+# Output directory
+output/ 
