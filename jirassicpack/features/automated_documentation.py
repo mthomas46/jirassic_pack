@@ -3,8 +3,9 @@
 # It prompts the user for the documentation type, project, and relevant filters (version or sprint), then fetches issues and writes a Markdown report.
 
 from typing import Any, Dict, List
-from jirassicpack.cli import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, logger, redact_sensitive, get_valid_project_key
-from jirassicpack.utils import error, info, spinner, info_spared_no_expense, prompt_with_validation, safe_get, build_context, write_markdown_file, require_param, render_markdown_report, contextual_log, get_option
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, error, info, info_spared_no_expense, prompt_with_validation, safe_get, write_markdown_file, require_param, render_markdown_report, get_option
+from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
+from jirassicpack.utils.jira import get_valid_project_key
 
 def prompt_automated_doc_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
     """
@@ -99,7 +100,6 @@ def automated_documentation(jira: Any, params: dict, user_email=None, batch_inde
             issues = retry_or_skip("Fetching issues for documentation", do_search)
         except Exception as e:
             error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context, feature='automated_documentation')
-            error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
             contextual_log('error', f"[automated_documentation] Failed to fetch issues: {e}", exc_info=True, extra=context)
             return
         if not issues:

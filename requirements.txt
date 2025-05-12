@@ -2,4 +2,11 @@ requests
 PyYAML
 questionary
 python-dotenv
-tabulate 
+tabulate
+colorama
+pyfiglet
+openai
+PyGithub
+python-json-logger
+yaspin
+tqdm 

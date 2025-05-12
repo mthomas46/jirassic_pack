@@ -13,11 +13,12 @@ import json
 import argparse
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
-import questionary
 import os
 from collections import Counter, defaultdict
 from tabulate import tabulate
 from statistics import mean, stdev
+from jirassicpack.utils.io import safe_get, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
+from jirassicpack.utils.logging import contextual_log
 
 LOG_FILE = 'jirassicpack.log'
 INTERVAL_CHOICES = ["hour", "day"]
@@ -330,15 +331,15 @@ def safe_prompt(label: str, typ: str, choices=None, default=None) -> Any:
     while True:
         try:
             if typ == "select":
-                return questionary.select(label + ":", choices=choices, default=default).ask()
+                return prompt_select(label + ":", choices=choices, default=default)
             elif typ == "int":
-                value = questionary.text(label + ":", default=str(default)).ask()
+                value = prompt_text(label + ":", default=str(default))
                 return int(value)
             elif typ == "float":
-                value = questionary.text(label + ":", default=str(default)).ask()
+                value = prompt_text(label + ":", default=str(default))
                 return float(value)
             else:
-                return questionary.text(label + ":", default=str(default)).ask()
+                return prompt_text(label + ":", default=str(default))
         except (ValueError, TypeError):
             print(f"Invalid input. Please enter a valid {typ}.")
 
@@ -451,10 +452,10 @@ def analytics_menu(logs: List[Dict[str, Any]]) -> None:
             "Export last analytics report (Markdown)",
             "Back to main menu"
         ]
-        analytics_action = questionary.select(
+        analytics_action = prompt_select(
             "Select analytics/report:",
             choices=analytics_choices
-        ).ask()
+        )
         if analytics_action in ANALYTICS_REGISTRY:
             entry = ANALYTICS_REGISTRY[analytics_action]
             params = []
@@ -483,7 +484,7 @@ def analytics_menu(logs: List[Dict[str, Any]]) -> None:
             if analytics_last is None:
                 print("No analytics report to export yet.")
             else:
-                export_path = questionary.text("Export analytics report to file:", default="analytics_report.json").ask()
+                export_path = prompt_text("Export analytics report to file:", default="analytics_report.json")
                 try:
                     dir_path = os.path.dirname(export_path)
                     if dir_path and not os.path.exists(dir_path):
@@ -502,7 +503,7 @@ def analytics_menu(logs: List[Dict[str, Any]]) -> None:
             if analytics_last is None:
                 print("No analytics report to export yet.")
             else:
-                export_path = questionary.text("Export analytics report to file:", default="analytics_report.md").ask()
+                export_path = prompt_text("Export analytics report to file:", default="analytics_report.md")
                 export_markdown(
                     analytics_headers_last,
                     analytics_last,
@@ -516,20 +517,16 @@ def analytics_menu(logs: List[Dict[str, Any]]) -> None:
 # =========================
 # Main Interactive Log Monitoring Feature
 # =========================
-def log_monitoring_feature() -> None:
-    """
-    Main entrypoint for interactive log monitoring and analytics.
-    Allows filtering, searching, analytics, and export of logs.
-    """
-    print("\n🦖 Log Monitoring & Search 🦖\n")
-    log_file = questionary.text("Path to log file:", default=LOG_FILE).ask()
+def log_parser(jira=None, options=None, user_email=None, batch_index=None, unique_suffix=None):
+    contextual_log('info', f"log_parser called with jira={jira}, options={options}, user_email={user_email}, batch_index={batch_index}, unique_suffix={unique_suffix}", extra={"feature": "log_parser", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
+    print("\n🦖 Log Parser & Search ��\n")
+    log_file = prompt_text("Path to log file:", default=LOG_FILE)
     logs = parse_logs(log_file)
     if not logs:
         print("No logs found.")
         return
-    # Submenu for filtering and analytics
     while True:
-        action = questionary.select(
+        action = prompt_select(
             "Select log filter/search option:",
             choices=[
                 "Filter by log level",
@@ -538,29 +535,27 @@ def log_monitoring_feature() -> None:
                 "Filter by time frame",
                 "Show summary",
                 "Export filtered logs",
-                "Analytics & Reports",
-                "Exit log monitoring"
+                "Exit log parser"
             ]
-        ).ask()
-        # Filtering options
+        )
         filtered_logs = logs
         if action == "Filter by log level":
-            log_level = questionary.select("Select log level:", choices=LOG_LEVEL_CHOICES).ask()
+            log_level = prompt_select("Select log level:", choices=LOG_LEVEL_CHOICES)
             filtered_logs = filter_logs(logs, level=log_level)
         elif action == "Filter by feature/module":
             feature_names = sorted(set(safe_get(log, ['feature'], 'N/A') for log in logs))
-            selected_feature = questionary.select("Select feature:", choices=feature_names).ask()
+            selected_feature = prompt_select("Select feature:", choices=feature_names)
             filtered_logs = filter_logs(logs, feature=selected_feature)
         elif action == "Filter by correlation ID":
-            correlation_ids = sorted(set(safe_get(log, ['correlation_id'], 'N/A') for log in logs if safe_get(log, ['correlation_id'])) )
+            correlation_ids = sorted(set(safe_get(log, ['correlation_id'], 'N/A') for log in logs if safe_get(log, ['correlation_id'])))
             if not correlation_ids:
                 print("No correlation IDs found in logs.")
                 continue
-            selected_correlation_id = questionary.select("Select correlation ID:", choices=correlation_ids).ask()
+            selected_correlation_id = prompt_select("Select correlation ID:", choices=correlation_ids)
             filtered_logs = filter_logs(logs, correlation_id=selected_correlation_id)
         elif action == "Filter by time frame":
-            start_time = questionary.text("Start time (YYYY-MM-DD HH:MM:SS):", default="").ask()
-            end_time = questionary.text("End time (YYYY-MM-DD HH:MM:SS):", default="").ask()
+            start_time = prompt_text("Start time (YYYY-MM-DD HH:MM:SS):", default="")
+            end_time = prompt_text("End time (YYYY-MM-DD HH:MM:SS):", default="")
             filtered_logs = filter_logs(logs, start_time=start_time or None, end_time=end_time or None)
         elif action == "Show summary":
             print(f"Total log entries: {len(logs)}")
@@ -579,7 +574,7 @@ def log_monitoring_feature() -> None:
                 print(f"  {feature}: {count}")
             continue
         elif action == "Export filtered logs":
-            export_path = questionary.text("Export filtered logs to file:", default="filtered_logs.json").ask()
+            export_path = prompt_text("Export filtered logs to file:", default="filtered_logs.json")
             try:
                 dir_path = os.path.dirname(export_path)
                 if dir_path and not os.path.exists(dir_path):
@@ -590,13 +585,10 @@ def log_monitoring_feature() -> None:
             except Exception as error:
                 print(f"Failed to write filtered logs to {export_path}: {error}")
             continue
-        elif action == "Analytics & Reports":
-            analytics_menu(logs)
-            continue
-        elif action == "Exit log monitoring":
-            print("Exiting log monitoring.")
+        elif action == "Exit log parser":
+            print("Exiting log parser.")
             break
-        # Show filtered logs (if not summary/export/exit/analytics)
+        # Show filtered logs (if not summary/export/exit)
         if action.startswith("Filter"):
             print(f"\nFiltered log entries: {len(filtered_logs)}\n")
             for log_entry in filtered_logs[:50]:  # Show up to 50 entries

@@ -121,8 +121,14 @@ def sprint_board_management(jira: Any, params: Dict[str, Any], user_email=None, 
         ensure_output_dir(output_dir)
         def do_manage():
             with spinner("🌋 Running Sprint Board Management..."):
-                board = jira.board(board_name)
-                sprint = jira.sprint(sprint_name, board.id)
+                boards = jira.list_boards(name=board_name)
+                if not boards:
+                    raise Exception(f"No board found with name '{board_name}'")
+                board = boards[0]
+                sprints = jira.list_sprints(board['id'])
+                sprint = next((s for s in sprints if s.get('name') == sprint_name), None)
+                if not sprint:
+                    raise Exception(f"No sprint found with name '{sprint_name}' on board '{board_name}'")
                 summary = generate_sprint_summary(sprint)
                 return board, sprint, summary
         try:

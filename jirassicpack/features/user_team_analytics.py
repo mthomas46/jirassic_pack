@@ -5,7 +5,7 @@
 from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info, prompt_with_validation, validate_required, validate_date, error, spinner, info_spared_no_expense, get_option
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user
-from jirassicpack.utils import render_markdown_report
+from jirassicpack.utils.io import render_markdown_report
 from datetime import datetime
 from typing import Any, Dict, List
 from colorama import Fore, Style

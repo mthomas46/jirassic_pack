@@ -5,7 +5,8 @@
 from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info
 from jirassicpack.utils.logging import contextual_log, redact_sensitive
 from jirassicpack.utils.jira import get_valid_project_key, get_valid_issue_type, get_valid_user, get_valid_field, get_valid_transition
-from jirassicpack.utils import validate_required, error, spinner, info_spared_no_expense, prompt_with_validation, build_context, render_markdown_report, get_option
+from jirassicpack.utils.io import validate_required, error, spinner, info_spared_no_expense, prompt_with_validation, render_markdown_report, get_option
+from jirassicpack.utils.logging import build_context
 from typing import Any, Dict
 import logging
 import json

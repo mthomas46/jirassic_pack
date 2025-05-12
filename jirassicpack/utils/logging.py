@@ -19,14 +19,33 @@ def redact_sensitive(options: Any) -> Any:
 def contextual_log(level: str, message: str, extra: Optional[Dict[str, Any]] = None, **kwargs) -> None:
     """
     Log a message with structured context fields for feature, user, operation, etc.
+    Handles exc_info as a keyword argument, not in extra/context.
     """
     logger = logging.getLogger("jirassicpack")
     if extra is None:
         extra = {}
+    # Extract exc_info from kwargs if present
+    exc_info = kwargs.pop('exc_info', False)
     # Merge in any additional context from kwargs
     context = {**extra, **kwargs}
     # Add a unique operation_id if not present
     if 'operation_id' not in context:
         context['operation_id'] = str(uuid.uuid4())
     log_func = getattr(logger, level, logger.info)
-    log_func(message, extra=context) 
+    log_func(message, extra=context, exc_info=exc_info)
+
+def build_context(feature=None, user=None, batch=None, suffix=None, **kwargs):
+    """
+    Build a structured context dictionary for logging, including feature, user, batch, suffix, and any extra fields.
+    """
+    context = {}
+    if feature is not None:
+        context['feature'] = feature
+    if user is not None:
+        context['user'] = user
+    if batch is not None:
+        context['batch'] = batch
+    if suffix is not None:
+        context['suffix'] = suffix
+    context.update(kwargs)
+    return context 
