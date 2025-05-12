@@ -1,10 +1,13 @@
 import questionary
 from typing import Any, Dict, Optional, Tuple, List
 import os
-from jirassicpack.utils.io import info, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, get_validated_input
+from jirassicpack.utils.io import info, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, get_validated_input, select_with_pagination_and_fuzzy
 from datetime import datetime
 from jirassicpack.utils.logging import contextual_log
 from jirassicpack.utils.io import pretty_print_result
+from rich.table import Table
+from rich.console import Console
+from jirassicpack.utils.rich_prompt import panel_objects_in_mirror, panel_clever_girl, panel_hold_onto_your_butts
 
 # Module-level cache for Jira users
 _CACHED_JIRA_USERS = None
@@ -59,15 +62,15 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
                 if not matches:
                     info("No users found matching your search.")
                     continue
-                picked_label = prompt_select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"])
-                if picked_label == "(Cancel)":
+                picked_label = select_with_pagination_and_fuzzy([m[0] for m in matches], message="Select a user:")
+                if not picked_label:
                     continue
                 picked = next((m for m in matches if m[0] == picked_label), None)
                 if picked:
                     return picked
             elif method == "Pick from list":
-                picked_label = prompt_select("Select a user:", choices=[c[0] for c in user_choices] + ["(Cancel)"])
-                if picked_label == "(Cancel)":
+                picked_label = select_with_pagination_and_fuzzy([c[0] for c in user_choices], message="Select a user:")
+                if not picked_label:
                     continue
                 picked = next((c for c in user_choices if c[0] == picked_label), None)
                 if picked:
@@ -110,16 +113,16 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
             if not matches:
                 info("No users found matching your search.")
                 continue
-            picked_label = prompt_select("Select a user:", choices=[m[0] for m in matches] + ["(Cancel)"])
-            if picked_label == "(Cancel)":
+            picked_label = select_with_pagination_and_fuzzy([m[0] for m in matches], message="Select a user:")
+            if not picked_label:
                 continue
             picked = next((m for m in matches if m[0] == picked_label), None)
             if picked and picked not in users:
                 users.append(picked)
         elif method == "Pick from list":
-            picked_label = prompt_select("Select a user:", choices=[c[0] for c in user_choices] + ["(Done)"])
-            if picked_label == "(Done)":
-                break
+            picked_label = select_with_pagination_and_fuzzy([c[0] for c in user_choices], message="Select a user:")
+            if not picked_label:
+                continue
             picked = next((c for c in user_choices if c[0] == picked_label), None)
             if picked and picked not in users:
                 users.append(picked)
@@ -146,10 +149,10 @@ def get_valid_project_key(jira):
     try:
         projects = jira.get('project')
         project_keys = [p['key'] for p in projects]
-        return prompt_select(
-            "Select a Jira Project:",
-            choices=project_keys
-        )
+        result = select_with_pagination_and_fuzzy(project_keys, message="Select a Jira Project:")
+        if isinstance(result, str) and len(project_keys) > 30:
+            panel_hold_onto_your_butts()
+        return result
     except Exception:
         return get_validated_input('Enter Jira Project Key:', regex=r'^[A-Z][A-Z0-9]+$', error_msg='Invalid project key format.')
 
@@ -157,10 +160,11 @@ def get_valid_issue_type(jira, project_key):
     try:
         meta = jira.get(f'issue/createmeta?projectKeys={project_key}')
         types = meta['projects'][0]['issuetypes']
-        return prompt_select(
-            "Select Issue Type:",
-            choices=[t['name'] for t in types]
-        )
+        choices = [t['name'] for t in types]
+        result = select_with_pagination_and_fuzzy(choices, message="Select Issue Type:")
+        if isinstance(result, str) and len(choices) > 30:
+            panel_clever_girl()
+        return result
     except Exception:
         return get_validated_input('Enter Issue Type:', error_msg='Invalid issue type.')
 
@@ -168,10 +172,10 @@ def get_valid_user(jira):
     try:
         users = jira.search_users("")
         user_choices = [f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>" for u in users]
-        return prompt_select(
-            "Select User:",
-            choices=user_choices
-        )
+        result = select_with_pagination_and_fuzzy(user_choices, message="Select User:")
+        if isinstance(result, str) and len(user_choices) > 30:
+            panel_clever_girl()
+        return result
     except Exception:
         return get_validated_input('Enter user email or username:', regex=r'^[^@\s]+@[^@\s]+\.[^@\s]+$', error_msg='Invalid email format.')
 
@@ -179,10 +183,10 @@ def get_valid_field(jira, project_key, issue_type):
     try:
         fields = jira.get('field')
         field_names = [f['name'] for f in fields if f.get('name')]
-        return prompt_select(
-            "Select Field:",
-            choices=field_names
-        )
+        result = select_with_pagination_and_fuzzy(field_names, message="Select Field:")
+        if isinstance(result, str) and len(field_names) > 30:
+            panel_hold_onto_your_butts()
+        return result
     except Exception:
         return get_validated_input('Enter field name:', error_msg='Invalid field name.')
 
@@ -190,10 +194,10 @@ def get_valid_transition(jira, issue_key):
     try:
         transitions = jira.get(f'issue/{issue_key}/transitions')
         choices = [t['name'] for t in transitions.get('transitions',[])]
-        return prompt_select(
-            "Select Transition:",
-            choices=choices
-        )
+        result = select_with_pagination_and_fuzzy(choices, message="Select Transition:")
+        if isinstance(result, str) and len(choices) > 30:
+            panel_clever_girl()
+        return result
     except Exception:
         return get_validated_input('Enter transition name:', error_msg='Invalid transition.')
 
@@ -209,10 +213,12 @@ def select_property_key(jira, account_id):
             return prompt_text("Enter property key:")
         choices = [k.get('key') for k in keys]
         choices.append("(Enter manually)")
-        picked = prompt_select("Select a property key:", choices=choices)
-        if picked == "(Enter manually)":
+        result = select_with_pagination_and_fuzzy(choices, message="Select a property key:")
+        if result == "(Enter manually)":
             return prompt_text("Enter property key:")
-        return picked
+        if isinstance(result, str) and len(choices) > 30:
+            panel_hold_onto_your_butts()
+        return result
     except Exception:
         return prompt_text("Enter property key:")
 
@@ -236,13 +242,22 @@ def search_issues(jira):
         if not issues:
             info("No issues found. Try again or use another option.")
             return
-        print("\nSearch Results:")
+        console = Console()
+        table = Table(title="Search Results", show_lines=True)
+        table.add_column("#", style="cyan", no_wrap=True)
+        table.add_column("Key", style="magenta")
+        table.add_column("Summary", style="green")
+        table.add_column("Status", style="yellow")
+        table.add_column("Assignee", style="blue")
         for i, issue in enumerate(issues, 1):
             key = issue.get('key', '?')
             summary = issue.get('fields', {}).get('summary', '?')
             status = issue.get('fields', {}).get('status', {}).get('name', '?')
             assignee = issue.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')
-            print(f"{i}. {key}: {summary} [Status: {status}] [Assignee: {assignee}]")
+            table.add_row(str(i), key, summary, status, assignee)
+        console.print(table)
+        if len(issues) > 10:
+            panel_objects_in_mirror()
 
     while True:
         action = prompt_select(
@@ -390,8 +405,8 @@ def select_board_name(jira):
                 continue
             boards = sorted(boards, key=lambda b: (b.get('name') or '').lower())
             choices = [f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})" for b in boards]
-            picked = prompt_select("Select a board:", choices=choices + ["(Search again)"])
-            if picked == "(Search again)":
+            picked = select_with_pagination_and_fuzzy(choices, message="Select a board:")
+            if not picked:
                 continue
             for b in boards:
                 label = f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})"
@@ -404,9 +419,9 @@ def select_board_name(jira):
                 continue
             boards = sorted(boards, key=lambda b: (b.get('name') or '').lower())
             choices = [f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})" for b in boards]
-            picked = prompt_select("Select a board:", choices=choices + ["(Abort)"])
-            if picked == "(Abort)":
-                return None
+            picked = select_with_pagination_and_fuzzy(choices, message="Select a board:")
+            if not picked:
+                continue
             for b in boards:
                 label = f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})"
                 if picked == label:
@@ -471,8 +486,8 @@ def select_sprint_name(jira, board_name=None, board_id=None):
                 print("No sprints match your search.")
                 continue
             choices = [f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})" for s in sprints]
-            picked = prompt_select("Select a sprint:", choices=choices + ["(Search again)"])
-            if picked == "(Search again)":
+            picked = select_with_pagination_and_fuzzy(choices, message="Select a sprint:")
+            if not picked:
                 continue
             for s in sprints:
                 label = f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})"
@@ -495,9 +510,9 @@ def select_sprint_name(jira, board_name=None, board_id=None):
                 print("No sprints found for this board.")
                 continue
             choices = [f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})" for s in sprints]
-            picked = prompt_select("Select a sprint:", choices=choices + ["(Abort)"])
-            if picked == "(Abort)":
-                return None
+            picked = select_with_pagination_and_fuzzy(choices, message="Select a sprint:")
+            if not picked:
+                continue
             for s in sprints:
                 label = f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})"
                 if picked == label:

@@ -28,6 +28,12 @@ import subprocess
 import shutil
 import requests
 import threading
+from jirassicpack.utils.rich_prompt import (
+    rich_panel, rich_info, rich_error, rich_success,
+    panel_life_finds_a_way, panel_spared_no_expense, panel_objects_in_mirror, panel_clever_girl,
+    panel_hold_onto_your_butts, panel_big_pile_of_errors, panel_jurassic_ascii, panel_nobody_cares,
+    panel_crazy_son_of_a, panel_welcome_dr, panel_combined_welcome
+)
 
 load_dotenv()
 
@@ -280,24 +286,21 @@ def feature_menu():
 # --- Main loop: persistently return to main menu ---
 def main() -> None:
     try:
-        banner = pyfiglet.figlet_format("JIRASSIC PACK", font="slant")
-        print(JUNGLE_GREEN + banner + RESET)
-        print(JUNGLE_GREEN + JIRASSIC_ASCII + RESET)
-        print(WARNING_YELLOW + BANNER_ALT_TEXT + RESET)
-        print(DANGER_RED + "\nROOOAAARRR! 🦖\n" + RESET)
-        print(f"[Banner: {BANNER_ALT_TEXT}]")
-        contextual_log('info', f"🦖 [CLI] Jirassic Pack CLI started.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+        # Show a single combined welcome panel
+        user = None
         config_path = None
         log_level = LOG_LEVEL
         if len(sys.argv) > 1:
             for arg in sys.argv:
+                if arg.startswith('--config='):
+                    config_path = arg.split('=', 1)[1]
                 if arg.startswith('--log-level='):
-                    log_level = arg.split('=')[-1].upper()
-                    logger.setLevel(getattr(logging, log_level, logging.INFO))
-        if len(sys.argv) > 1 and sys.argv[1].startswith('--config'):
-            config_path = sys.argv[1].split('=')[-1] if '=' in sys.argv[1] else sys.argv[2]
+                    log_level = arg.split('=', 1)[1]
         config = ConfigLoader(config_path)
         jira_conf = config.get_jira_config()
+        user = jira_conf.get('email', 'User')
+        panel_combined_welcome(user)
+        rich_info(BANNER_ALT_TEXT)
         options = config.get_options()
         features = getattr(config, 'config', {}).get('features')
         feature = getattr(config, 'config', {}).get('feature')
@@ -306,8 +309,8 @@ def main() -> None:
             if not token or len(token) < 7:
                 return '***'
             return token[:3] + '*' * (len(token)-6) + token[-3:]
-        print(WARNING_YELLOW + f"Loaded Jira config: URL={jira_conf['url']}, Email={jira_conf['email']}, Token={redact_token(jira_conf['api_token'])}" + RESET)
-        contextual_log('info', f"🦖 [CLI] Loaded config from {config_path or 'default'} for user {jira_conf.get('email')}", extra={"feature": "cli", "user": jira_conf.get('email'), "batch": None, "suffix": None})
+        rich_info(f"Loaded Jira config: URL={jira_conf['url']}, Email={jira_conf['email']}, Token={redact_token(jira_conf['api_token'])}")
+        logger.info(f"🦖 Loaded config: {config_path or 'default'} | Jira config: {redact_sensitive(jira_conf)} | Options: {redact_sensitive(options)}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
         # Prompt for Jira credentials (shared by all features)
         if not jira_conf['url']:
             jira_conf['url'] = prompt_text("Jira URL:", default=os.environ.get('JIRA_URL', 'https://your-domain.atlassian.net'))
@@ -318,8 +321,10 @@ def main() -> None:
         if not jira_conf['api_token']:
             jira_conf['api_token'] = prompt_password("Jira API Token:")
             contextual_log('info', "User prompted for Jira API Token", operation="user_prompt", status="answered", params={"prompt": "Jira API Token"}, extra={"feature": "cli"})
+        # Before long operations
+        panel_hold_onto_your_butts()
         with spinner("Connecting to Jira..."):
-            contextual_log('info', f"🦖 [CLI] Connecting to Jira at {jira_conf['url']} as {jira_conf['email']}", extra={"feature": "cli", "user": jira_conf['email'], "batch": None, "suffix": None})
+            contextual_log('info', f"🦖 [CLI] Connecting to Jira at {jira_conf['url']} as {jira_conf['email']}", extra={"feature": "cli", "user": jira_conf['email'], "batch": None, "suffix": None, "easteregg": "hold_onto_your_butts"})
             jira = JiraClient(jira_conf['url'], jira_conf['email'], jira_conf['api_token'])
         register_features()
         # Batch mode: run each feature with merged options
@@ -338,6 +343,8 @@ def main() -> None:
                 contextual_log('info', f"🦖 [CLI] Running feature: {name} | Options: {redact_sensitive(merged_options)} | Batch index: {i} | Suffix: {unique_suffix} | Correlation ID: {correlation_id}", extra={"feature": name, "user": None, "batch": i, "suffix": unique_suffix, "correlation_id": correlation_id})
                 run_feature(name, jira, merged_options, user_email=jira_conf.get('email'), batch_index=i, unique_suffix=unique_suffix)
             contextual_log('info', "🦖 [CLI] Batch run complete!", extra={"feature": "cli", "user": None, "batch": None, "suffix": None, "correlation_id": correlation_id})
+            panel_spared_no_expense()
+            panel_crazy_son_of_a()
             contextual_log('info', "🦖 [CLI] Welcome to Jurassic Park.", extra={"feature": "cli", "user": jira_conf.get('email'), "batch": None, "suffix": None, "correlation_id": correlation_id})
             info("🦖 Welcome to Jurassic Park.")
             return
@@ -354,15 +361,13 @@ def main() -> None:
                 if action == "exit":
                     print(f"{JUNGLE_GREEN}Goodbye!{RESET}")
                     contextual_log('info', f"🦖 [CLI] User exited from main menu.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
-                    halt_cli("User exited from main menu.")
+                    panel_nobody_cares()
+                    rich_info("🦖 CLI halted. User exited from main menu.")
+                    return
                 contextual_log('info', f"🦖 [CLI] User selected feature '{action}' for user {jira_conf.get('email')}", extra={"feature": action, "user": jira_conf.get('email'), "batch": None, "suffix": None})
                 run_feature(action, jira, options, user_email=jira_conf.get('email'))
-    except KeyboardInterrupt:
-        halt_cli("Graceful exit: Goodbye from Jirassic Pack!")
     except Exception as e:
-        contextual_log('exception', f"🦖 [CLI] Unhandled exception: {e}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
-        error(f"🦖 Unhandled exception in main: {e}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
-        halt_cli(f"Unhandled exception: {e}")
+        rich_error(f"Fatal error: {e}")
 
 def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str = None, batch_index: int = None, unique_suffix: str = None) -> None:
     update_llm_menu()
@@ -450,13 +455,16 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
     if key == "search_users":
         try:
             query = prompt_text("Search query (name/email):")
-            contextual_log('info', f"🦖 [CLI] User searched users with query: {query}", extra=context)
+            contextual_log('info', f"🦖 [CLI] User searched users with query: {query}", extra={"feature": key, "easteregg": "clever_girl" if 'raptor' in query.lower() else None})
             result = jira.search_users(query=query)
             if not result:
+                panel_nobody_cares()
                 info("Aborted: No users found for query.")
                 return
+            panel_clever_girl()
             pretty_print_result(result)
         except Exception as e:
+            panel_big_pile_of_errors()
             error(f"🦖 Error searching users: {e}", extra=context)
             contextual_log('error', f"🦖 [CLI] Error searching users: {e}", exc_info=True, extra=context)
         return
@@ -630,6 +638,7 @@ def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -
         try:
             users = jira.get('users/search', params={'maxResults': 1000})
             if not users:
+                panel_nobody_cares()
                 info("Aborted: No users found or operation cancelled.")
                 return
             filename = f"{output_dir}/jira_users{unique_suffix}.md"
@@ -638,16 +647,14 @@ def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -
                     f.write("# Jira Users\n\n")
                     for user in users:
                         f.write(f"- {user.get('displayName', user.get('name', 'Unknown'))} ({user.get('emailAddress', 'N/A')})\n")
-                print(f"{JUNGLE_GREEN}🦖 User list written to {filename}{RESET}")
-                contextual_log('info', "🦖 Objects in mirror are closer than they appear.", extra=context)
+                panel_objects_in_mirror()
                 info("🦖 Objects in mirror are closer than they appear.")
-                contextual_log('info', f"🦖 [CLI] Writing user list to {filename}", operation="output_write", output_file=filename, status="success", extra=context)
             except Exception as file_err:
-                error(f"🦖 Failed to write user list to file: {file_err}", extra=context)
-                contextual_log('error', f"🦖 [CLI] [output_all_users] File write error: {file_err}", exc_info=True, extra=context)
+                panel_big_pile_of_errors()
+                error(f"🦖 Failed to write user list to file: {file_err}", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
         except Exception as e:
-            error(f"🦖 Failed to fetch users: {e}", extra=context)
-            contextual_log('error', f"🦖 [CLI] [output_all_users] Exception: {e}", exc_info=True, extra=context)
+            panel_big_pile_of_errors()
+            error(f"🦖 Failed to fetch users: {e}", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
 
 def output_all_user_property_keys(jira: JiraClient, options: dict, unique_suffix: str = "") -> None:
     context = {"feature": "output_all_user_property_keys", "user": None, "batch": None, "suffix": unique_suffix}
@@ -680,12 +687,11 @@ def output_all_user_property_keys(jira: JiraClient, options: dict, unique_suffix
             contextual_log('error', f"🦖 [CLI] [output_all_user_property_keys] Exception: {e}", exc_info=True, extra=context)
 
 def pretty_print_result(result):
-    print("\n" + WARNING_YELLOW + json.dumps(result, indent=2) + RESET)
+    rich_panel(json.dumps(result, indent=2), style="info")
 
 def halt_cli(reason=None):
-    """Gracefully halt the CLI, printing a friendly message and logging the halt."""
     msg = f"🦖 CLI halted. {reason}" if reason else "🦖 CLI halted."
-    print(f"{DANGER_RED}{msg}{RESET}")
+    rich_error(msg)
     contextual_log('warning', msg, extra={"feature": "cli"})
     sys.exit(0)
 
@@ -821,13 +827,13 @@ def live_tail_file(filepath, label):
     import os
     import sys
     import time
-    print(f"--- {label} (live tail, Ctrl+C to exit) ---")
+    rich_panel(f"--- {label} (live tail, Ctrl+C to exit) ---", style="info")
     last_inode = None
     try:
         while True:
             try:
                 if not os.path.exists(filepath):
-                    print(f"No {label} found at {filepath}. Retrying in 2s...")
+                    rich_error(f"No {label} found at {filepath}. Retrying in 2s...")
                     time.sleep(2)
                     continue
                 with open(filepath, 'r') as f:
@@ -836,32 +842,32 @@ def live_tail_file(filepath, label):
                     while True:
                         line = f.readline()
                         if line:
-                            print(line, end='')
+                            rich_info(line.rstrip())
                         else:
                             time.sleep(0.5)
                             # Check for log rotation/truncation
                             try:
                                 if os.stat(filepath).st_ino != last_inode:
-                                    print(f"\n[INFO] {label} was rotated or truncated. Re-opening...")
+                                    rich_info(f"\n[INFO] {label} was rotated or truncated. Re-opening...")
                                     break
                             except Exception:
                                 break
             except PermissionError:
-                print(f"[ERROR] Permission denied for {label} at {filepath}. Retrying in 2s...")
+                rich_error(f"[ERROR] Permission denied for {label} at {filepath}. Retrying in 2s...")
                 time.sleep(2)
                 continue
             except FileNotFoundError:
-                print(f"[ERROR] {label} not found at {filepath}. Retrying in 2s...")
+                rich_error(f"[ERROR] {label} not found at {filepath}. Retrying in 2s...")
                 time.sleep(2)
                 continue
             except Exception as e:
-                print(f"[ERROR] Unexpected error tailing {label}: {e}. Retrying in 2s...")
+                rich_error(f"[ERROR] Unexpected error tailing {label}: {e}. Retrying in 2s...")
                 time.sleep(2)
                 continue
     except KeyboardInterrupt:
-        print(f"\nStopped tailing {label}.")
+        rich_info(f"\nStopped tailing {label}.")
     except Exception as e:
-        print(f"[ERROR] Fatal error in tailing {label}: {e}")
+        rich_error(f"[ERROR] Fatal error in tailing {label}: {e}")
 
 def live_tail_local_llm_logs():
     import os

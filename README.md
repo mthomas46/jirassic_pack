@@ -851,3 +851,86 @@ Currently, starting the local LLM server (`ollama serve` and `python http_api.py
 See the `jirassicpack/features/ticket_discussion_summary.py` and `jirassicpack/features/test_local_llm.py` for example usage and integration points.
 
 --- 
+
+## Requirements & Setup
+
+### Dependencies
+
+Install all required packages:
+
+```sh
+pip install -r requirements.txt
+```
+
+**Key dependencies:**
+- `questionary` – Interactive CLI prompts
+- `rich` – Beautiful output, panels, and tracebacks
+- `marshmallow` – Input/config validation
+- `InquirerPy` – Fuzzy finder and advanced selection for large lists
+- `psutil` – Process management for LLM server orchestration
+- `python-dotenv` – Environment variable loading
+- `pyfiglet`, `colorama`, `tqdm`, `yaspin` – Theming, banners, progress
+- `requests`, `PyYAML`, `PyGithub`, `openai` – API and integration
+
+### Virtual Environment (Recommended)
+
+```sh
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Environment Variables
+
+Create a `.env` file or set these variables:
+
+```
+JIRA_URL=https://your-domain.atlassian.net
+JIRA_EMAIL=your-email@example.com
+JIRA_API_TOKEN=your-api-token
+```
+
+You will be prompted for any missing values on first run.
+
+---
+
+## Quickstart
+
+Run the CLI:
+
+```sh
+python -m jirassicpack.cli
+```
+
+or
+
+```sh
+python jirassicpack/cli.py
+```
+
+---
+
+## Advanced CLI UX
+
+- **Fuzzy Finder:** For large lists (users, boards, sprints, etc.), type to search and filter instantly.
+- **Pagination & Jump-to-Letter:** For medium lists, navigate with next/prev, jump to page, or jump to a letter.
+- **Jurassic Park–Themed Panels:** Enjoy themed banners, panels, and Easter eggs throughout the CLI.
+- **Beautiful Output:** All prompts, errors, and info use `rich` for a modern, readable experience.
+
+---
+
+## Local LLM Integration
+
+- Start/stop the local LLM server from the main menu or via shell script.
+- Test the local LLM endpoints directly from the CLI.
+
+---
+
+## Troubleshooting
+
+- If you see missing package errors, run `pip install -r requirements.txt` again.
+- For local LLM issues, check logs or use the "Test Local LLM" menu.
+
+---
+
+For more, see the full feature list and usage examples below! 

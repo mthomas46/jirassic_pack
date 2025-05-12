@@ -5,6 +5,12 @@ from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_c
 from jirassicpack.features.time_tracking_worklogs import select_jira_user
 from datetime import datetime
 import time
+from marshmallow import Schema, fields, ValidationError
+
+class SummarizeTicketsOptionsSchema(Schema):
+    user = fields.Str(required=True)
+    start_date = fields.Date(required=True)
+    end_date = fields.Date(required=True)
 
 def prompt_summarize_tickets_options(options, jira=None):
     """
@@ -57,8 +63,28 @@ def prompt_summarize_tickets_options(options, jira=None):
     output_dir = get_option(options, 'output_dir', default=os.environ.get('JIRA_OUTPUT_DIR', 'output'))
     unique_suffix = options.get('unique_suffix', '')
     ac_field = options.get('acceptance_criteria_field') or os.environ.get('JIRA_ACCEPTANCE_CRITERIA_FIELD', 'customfield_10001')
+    schema = SummarizeTicketsOptionsSchema()
+    # Validate options dict, prompt for missing/invalid fields
+    while True:
+        try:
+            validated = schema.load({
+                'user': username,
+                'start_date': start_date,
+                'end_date': end_date,
+            })
+            break
+        except ValidationError as err:
+            for field, msgs in err.messages.items():
+                print(f"[marshmallow] {field}: {', '.join(msgs)}")
+                # Prompt for missing/invalid field
+                value = input(f"Enter value for {field}: ")
+                options[field] = value
+    # Use validated values
+    user = validated['user']
+    config_start = str(validated['start_date'])
+    config_end = str(validated['end_date'])
     return {
-        'user': username,
+        'user': user,
         'start_date': start_date,
         'end_date': end_date,
         'output_dir': output_dir,

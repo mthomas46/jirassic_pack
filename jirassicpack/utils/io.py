@@ -9,6 +9,12 @@ from datetime import datetime
 import contextlib
 import threading
 import time
+from rich.traceback import install as rich_traceback_install
+from jirassicpack.utils.rich_prompt import rich_info, rich_error, rich_warning, rich_success, rich_prompt_text, rich_prompt_confirm, rich_panel
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+from InquirerPy import inquirer
+
+rich_traceback_install()
 
 JUNGLE_GREEN = '\033[38;5;34m'
 WARNING_YELLOW = '\033[38;5;226m'
@@ -52,19 +58,22 @@ def styled_prompt(text):
     return f"{PROMPT_COLOR}{PROMPT_ICON} {text}{Style.RESET_ALL}"
 
 def prompt_text(message, **kwargs):
-    return questionary.text(styled_prompt(message), **kwargs).ask()
+    return rich_prompt_text(message, **kwargs)
 
 def prompt_select(message, choices, **kwargs):
-    return questionary.select(styled_prompt(message), choices=choices, **kwargs).ask()
+    # Use questionary for select, but print the message with rich first
+    rich_panel(message, style="prompt")
+    return questionary.select(message, choices=choices, **kwargs).ask()
 
 def prompt_password(message, **kwargs):
-    return questionary.password(styled_prompt(message), **kwargs).ask()
+    return questionary.password(message, **kwargs).ask()
 
 def prompt_checkbox(message, choices, **kwargs):
-    return questionary.checkbox(styled_prompt(message), choices=choices, **kwargs).ask()
+    rich_panel(message, style="prompt")
+    return questionary.checkbox(message, choices=choices, **kwargs).ask()
 
 def prompt_path(message, **kwargs):
-    return questionary.path(styled_prompt(message), **kwargs).ask()
+    return questionary.path(message, **kwargs).ask()
 
 def ensure_output_dir(directory: str) -> None:
     """
@@ -75,18 +84,14 @@ def ensure_output_dir(directory: str) -> None:
         os.makedirs(directory)
 
 def print_section_header(title: str, feature_key: Optional[str] = None) -> None:
-    """
-    Print a section header with per-feature ASCII art and color theme.
-    """
     color = FEATURE_COLORS.get(feature_key, EARTH_BROWN)
     art = FEATURE_ASCII_ART.get(feature_key, '')
     try:
         header = pyfiglet.figlet_format(title, font="mini")
     except Exception:
         header = title
-    print(color + art + RESET)
-    print(color + header + RESET)
-    print(f"[Section: {title}]")  # For screen readers
+    rich_panel(f"{art}\n{header}", title=title, style="banner")
+    rich_info(f"[Section: {title}]")
 
 def celebrate_success() -> None:
     """
@@ -115,16 +120,16 @@ def retry_or_skip(action_desc: str, func, *args, **kwargs):
                 sys.exit(1)
 
 def print_batch_summary(results):
-    print(WARNING_YELLOW + "\n🦖 Batch Summary:" + RESET)
-    print("Feature         | Status")
-    print("----------------|--------")
+    rich_panel("🦖 Batch Summary:", style="info")
+    rich_info("Feature         | Status")
+    rich_info("----------------|--------")
     for name, status in results:
-        color = JUNGLE_GREEN if status == "Success" else DANGER_RED
-        print(f"{name:<15} | {color}{status}{RESET}")
+        color = "success" if status == "Success" else "error"
+        rich_info(f"{name:<15} | [{color}]{status}[/{color}]")
 
 def pretty_print_result(result):
     import json
-    print("\n" + WARNING_YELLOW + json.dumps(result, indent=2) + RESET)
+    rich_panel(json.dumps(result, indent=2), style="info")
 
 def halt_cli(reason=None):
     """Gracefully halt the CLI, printing a friendly message and logging the halt."""
@@ -183,47 +188,34 @@ def get_validated_input(prompt, validate_fn=None, error_msg=None, default=None, 
 
 @contextlib.contextmanager
 def spinner(message="Working..."):
-    """A simple CLI spinner context manager for visual feedback during long operations."""
-    stop = False
-    def spin():
-        spinner_cycle = '|/-\\'
-        idx = 0
-        while not stop:
-            sys.stdout.write(f"\r{message} {spinner_cycle[idx % len(spinner_cycle)]}")
-            sys.stdout.flush()
-            time.sleep(0.1)
-            idx += 1
-    t = threading.Thread(target=spin)
-    t.start()
-    try:
-        yield
-    finally:
-        stop = True
-        t.join()
-        sys.stdout.write("\r" + " " * (len(message) + 4) + "\r")
-        sys.stdout.flush()
-
-# Simple progress_bar generator for iterating with progress feedback
-import itertools
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        transient=True,
+    ) as progress:
+        task = progress.add_task(message, total=None)
+        try:
+            yield
+        finally:
+            progress.remove_task(task)
 
 def progress_bar(iterable, desc="Progress"):
-    """A simple progress bar for CLI batch operations."""
     total = len(iterable) if hasattr(iterable, '__len__') else None
-    for i, item in enumerate(iterable, 1):
-        if total:
-            sys.stdout.write(f"\r{desc}: {i}/{total}")
-        else:
-            sys.stdout.write(f"\r{desc}: {i}")
-        sys.stdout.flush()
-        yield item
-    sys.stdout.write("\n")
-    sys.stdout.flush()
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        transient=True,
+    ) as progress:
+        task = progress.add_task(desc, total=total)
+        for i, item in enumerate(iterable, 1):
+            progress.update(task, completed=i)
+            yield item
 
 def error(message, extra=None, feature=None):
-    """
-    Print an error message in red and log it if contextual_log is available.
-    """
-    print(Fore.RED + "🦖 " + str(message) + Style.RESET_ALL)
+    rich_error(message)
     try:
         from jirassicpack.utils.logging import contextual_log
         context = extra or {}
@@ -234,10 +226,7 @@ def error(message, extra=None, feature=None):
         pass  # Logging is best-effort
 
 def info(message, extra=None, feature=None):
-    """
-    Print an info message in yellow and log it if contextual_log is available.
-    """
-    print(Fore.YELLOW + str(message) + Style.RESET_ALL)
+    rich_info(message)
     try:
         from jirassicpack.utils.logging import contextual_log
         context = extra or {}
@@ -248,10 +237,7 @@ def info(message, extra=None, feature=None):
         pass
 
 def info_spared_no_expense():
-    """
-    Print a Jurassic Park reference for successful completion.
-    """
-    print(Fore.GREEN + "🦖 Spared no expense!" + Style.RESET_ALL)
+    rich_success("🦖 Spared no expense!")
 
 def prompt_with_validation(prompt, validate_fn=None, error_msg=None, default=None):
     while True:
@@ -386,3 +372,55 @@ def require_param(params, key, context, message=None):
         error(message or f"{key} is required.", extra=context)
         return False
     return True 
+
+def select_with_pagination_and_fuzzy(choices, message="Select an item:", page_size=15, fuzzy_threshold=30):
+    """
+    Combines pagination, jump-to-letter, and fuzzy finder for large lists.
+    Uses InquirerPy fuzzy finder for very large lists, otherwise paginates and allows jump-to-letter.
+    """
+    if len(choices) > fuzzy_threshold:
+        # Use fuzzy finder for very large lists
+        return inquirer.fuzzy(
+            message=message,
+            choices=choices,
+            max_height="70%"
+        ).execute()
+    elif len(choices) > page_size:
+        # Paginate and allow jump to letter
+        page = 0
+        total_pages = (len(choices) - 1) // page_size + 1
+        while True:
+            start = page * page_size
+            end = start + page_size
+            page_choices = choices[start:end]
+            nav = []
+            if page > 0:
+                nav.append("⬅️ Previous page")
+            if end < len(choices):
+                nav.append("➡️ Next page")
+            nav.append("🔤 Jump to letter")
+            nav.append("🔢 Jump to page")
+            nav.append("❌ Exit")
+            selection = prompt_select(
+                f"{message} (Page {page+1}/{total_pages})",
+                choices=page_choices + nav
+            )
+            if selection == "⬅️ Previous page":
+                page -= 1
+            elif selection == "➡️ Next page":
+                page += 1
+            elif selection == "🔢 Jump to page":
+                page = int(prompt_text("Enter page number:", default=str(page+1))) - 1
+            elif selection == "🔤 Jump to letter":
+                letter = prompt_text("Type a letter to jump:")
+                idx = next((i for i, c in enumerate(choices) if c.lower().startswith(letter.lower())), None)
+                if idx is not None:
+                    page = idx // page_size
+                else:
+                    info("No items found for that letter.")
+            elif selection == "❌ Exit":
+                return None
+            else:
+                return selection
+    else:
+        return prompt_select(message, choices=choices) 

@@ -9,4 +9,8 @@ openai
 PyGithub
 python-json-logger
 yaspin
-tqdm 
+tqdm
+rich
+marshmallow
+InquirerPy
+psutil 
