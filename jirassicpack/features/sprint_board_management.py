@@ -87,6 +87,17 @@ def generate_sprint_summary(sprint: Any) -> Dict[str, Any]:
     }
 
 def sprint_board_management(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
+    """
+    Main feature entrypoint for managing Jira sprint boards. Handles validation, sprint actions, and report writing.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (dict): Parameters for the sprint (board, action, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes a Markdown report to disk.
+    """
     correlation_id = params.get('correlation_id')
     context = build_context("sprint_board_management", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()

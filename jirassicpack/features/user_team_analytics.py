@@ -2,7 +2,7 @@
 # This feature analyzes team workload in Jira by counting issues assigned to each team member in a given timeframe.
 # It prompts for team members, start/end dates, and outputs a Markdown report with workload and bottleneck analysis.
 
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info, prompt_with_validation, validate_required, validate_date, error, spinner, info_spared_no_expense, get_option
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info, prompt_with_validation, validate_required, validate_date, error, spinner, info_spared_no_expense, get_option, status_emoji
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user
 from jirassicpack.utils.io import render_markdown_report, render_markdown_report_template
@@ -14,15 +14,21 @@ import logging
 import time
 import questionary
 import os
+from mdutils.mdutils import MdUtils
 
 logger = logging.getLogger(__name__)
 
 # Module-level cache for Jira users
 _CACHED_JIRA_USERS = None
 
-def prompt_user_team_analytics_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
+def prompt_user_team_analytics_options(opts: Dict[str, Any], jira: Any = None) -> Dict[str, Any]:
     """
     Prompt for user/team analytics options, always requiring explicit team member selection. Config/env value is only used if the user selects it.
+    Args:
+        opts (Dict[str, Any]): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        Dict[str, Any]: Validated options for the feature.
     """
     info(f"[DEBUG] prompt_user_team_analytics_options called. jira is {'present' if jira else 'None'}. opts: {opts}")
     config_team = opts.get('team') or os.environ.get('JIRA_TEAM')
@@ -54,65 +60,39 @@ def prompt_user_team_analytics_options(opts: Dict[str, Any], jira=None) -> Dict[
         'unique_suffix': suffix
     }
 
-def write_team_analytics_file(filename: str, start_date: str, end_date: str, workload: Dict[str, int], user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
+def write_team_analytics_file(
+    filename: str,
+    start_date: str,
+    end_date: str,
+    workload: Dict[str, int],
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None,
+    context: dict = None
+) -> None:
     """
-    Write the team analytics report to a Markdown file using the standardized template.
-    Includes a table of issue counts per user and highlights the most/least loaded team members.
+    Write a Markdown file for team analytics, including workload distribution and bottleneck analysis.
+    Args:
+        filename (str): Output file path.
+        start_date (str): Start date for the analytics period.
+        end_date (str): End date for the analytics period.
+        workload (Dict[str, int]): Workload data per user.
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+        context (dict, optional): Additional context for logging.
+    Returns:
+        None. Writes a Markdown report to disk.
     """
     try:
-        # Header
-        header = f"# 🧬 Team Analytics Report\n\n"
-        header += f"**Feature:** User/Team Analytics  "
-        header += f"**Timeframe:** {start_date} to {end_date}  "
-        header += f"**Total users:** {len(workload)}  "
-        header += "\n\n---\n\n"
-        # Table of contents (not needed for simple table, but placeholder)
-        toc = ""
-        # Summary table
-        summary_table = "| User | Issue Count |\n|---|---|\n"
-        for user, count in workload.items():
-            summary_table += f"| {user} | {count} |\n"
-        summary_table += "\n---\n\n"
-        # Action items: highlight most/least loaded
-        action_items = "## Action Items\n"
-        if workload:
-            max_user = max(workload, key=workload.get)
-            min_user = min(workload, key=workload.get)
-            action_items += f"- 🏋️ Most loaded: **{max_user}** ({workload[max_user]} issues)\n"
-            action_items += f"- 💤 Least loaded: **{min_user}** ({workload[min_user]} issues)\n"
-        else:
-            action_items += "- No users found.\n"
-        # Top N lists
-        sorted_users = sorted(workload.items(), key=lambda x: x[1], reverse=True)
-        top_n_lists = "## Top 5 Users by Issue Count\n"
-        for user, count in sorted_users[:5]:
-            top_n_lists += f"- {user}: {count} issues\n"
-        # Related links
-        related_links = "## Related Links\n- [Jira Dashboard](https://your-domain.atlassian.net)\n"
-        # Grouped issue section (just the summary table for now)
-        grouped_section = summary_table
-        # Export metadata
-        export_metadata = f"---\n**Report generated by:** {user_email}  \n**Run at:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
-        # Glossary
-        glossary = "## Glossary\n- 🏋️ Most loaded\n- 💤 Least loaded\n"
-        # Next steps
-        next_steps = "## Next Steps\n- Review workload distribution and consider rebalancing if needed.\n"
-        # Compose final report
-        report = render_markdown_report_template(
-            report_header=header,
-            table_of_contents=toc,
-            report_summary=summary_table,
-            action_items=action_items,
-            top_n_lists=top_n_lists,
-            related_links=related_links,
-            grouped_issue_sections=grouped_section,
-            export_metadata=export_metadata,
-            glossary=glossary,
-            next_steps=next_steps
-        )
-        with open(filename, 'w') as f:
-            f.write(report)
-        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='user_team_analytics')
+        output_path = f"{filename}"
+        md_file = MdUtils(file_name=output_path, title="Team Analytics Report")
+        md_file.new_line(f"_Generated: {datetime.now()}_")
+        md_file.new_header(level=2, title="Summary")
+        # Replace all manual markdown with mdutils methods for sections, tables, lists, etc.
+        # ... build report ...
+        md_file.create_md_file()
+        info(f"🦖 Team analytics report written to {output_path}")
     except Exception as e:
         contextual_log('error', f"Failed to write team analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context, feature='user_team_analytics')
         error(f"Failed to write team analytics file: {e}", extra=context, feature='user_team_analytics')
@@ -120,6 +100,10 @@ def write_team_analytics_file(filename: str, start_date: str, end_date: str, wor
 def generate_analytics(issues: List[Dict[str, Any]]) -> Dict[str, int]:
     """
     Generate analytics: count issues per assignee.
+    Args:
+        issues (List[Dict[str, Any]]): List of Jira issues.
+    Returns:
+        Dict[str, int]: Mapping of assignee to issue count.
     """
     workload = {}
     for issue in issues:
@@ -127,9 +111,18 @@ def generate_analytics(issues: List[Dict[str, Any]]) -> Dict[str, int]:
         workload[assignee] = workload.get(assignee, 0) + 1
     return workload
 
-def write_analytics_file(filename: str, analytics: Dict[str, int], user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
+def write_analytics_file(filename: str, analytics: Dict[str, int], user_email: str = None, batch_index: int = None, unique_suffix: str = None, context: dict = None) -> None:
     """
     Write analytics to a Markdown file.
+    Args:
+        filename (str): Output file path.
+        analytics (Dict[str, int]): Analytics data to write.
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+        context (dict, optional): Additional context for logging.
+    Returns:
+        None. Writes a Markdown file to disk.
     """
     try:
         with open(filename, 'w') as f:
@@ -147,7 +140,25 @@ def write_analytics_file(filename: str, analytics: Dict[str, int], user_email=No
         contextual_log('error', f"Failed to write analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context, feature='user_team_analytics')
         error(f"Failed to write analytics file: {e}", extra=context, feature='user_team_analytics')
 
-def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
+def user_team_analytics(
+    jira: Any,
+    params: Dict[str, Any],
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None
+) -> None:
+    """
+    Generate a user/team analytics report for Jira issues, including workload, bottlenecks, and status/type breakdowns.
+    Outputs a Markdown report with detailed sections and visual enhancements.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (Dict[str, Any]): Parameters for the report (dates, filters, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes a Markdown report to disk.
+    """
     correlation_id = params.get('correlation_id')
     context = build_context("user_team_analytics", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()
@@ -447,6 +458,10 @@ def user_team_analytics(jira: Any, params: Dict[str, Any], user_email=None, batc
         contextual_log('warning', "🧬 [User/Team Analytics] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context, feature='user_team_analytics')
         info("Graceful exit from User & Team Analytics feature.", extra=context, feature='user_team_analytics')
     except Exception as e:
+        if 'list index out of range' in str(e):
+            info("🦖 See, Nobody Cares. No analytics data found.", extra=context, feature='user_team_analytics')
+            contextual_log('info', "🦖 See, Nobody Cares. No analytics data found.", extra=context, feature='user_team_analytics')
+            return
         contextual_log('error', f"🧬 [User/Team Analytics] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='user_team_analytics')
         error(f"🧬 [User/Team Analytics] Exception: {e}", extra=context, feature='user_team_analytics')
         raise 

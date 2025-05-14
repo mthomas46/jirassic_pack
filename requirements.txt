@@ -13,4 +13,6 @@ tqdm
 rich
 marshmallow
 InquirerPy
-psutil 
+psutil
+Flask
+mdutils 

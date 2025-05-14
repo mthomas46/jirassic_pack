@@ -2,7 +2,7 @@
 # This feature allows users to create a new Jira issue by prompting for project, summary, description, and issue type.
 # It writes the created issue's key and summary to a Markdown file for record-keeping.
 
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, info, get_option, make_output_filename, render_markdown_report_template
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, info, get_option, make_output_filename, render_markdown_report_template, status_emoji
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import get_valid_project_key, get_valid_issue_type
 from jirassicpack.utils.io import validate_required, error, render_markdown_report
@@ -15,6 +15,7 @@ from jirassicpack.utils.rich_prompt import rich_error
 import re
 from jirassicpack.utils.fields import IssueKeyField, ProjectKeyField, BaseOptionsSchema, validate_nonempty
 from datetime import datetime
+from mdutils.mdutils import MdUtils
 
 class CreateIssueOptionsSchema(BaseOptionsSchema):
     project = ProjectKeyField(required=True, error_messages={"required": "Project key is required."})
@@ -23,9 +24,14 @@ class CreateIssueOptionsSchema(BaseOptionsSchema):
     issue_type = fields.Str(load_default='Task', validate=validate.OneOf(['Task', 'Bug', 'Story']))
     # output_dir and unique_suffix are inherited
 
-def prompt_create_issue_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
+def prompt_create_issue_options(opts: Dict[str, Any], jira: Any = None) -> Dict[str, Any]:
     """
     Prompt for create issue options using Jira-aware helpers for project and issue type.
+    Args:
+        opts (Dict[str, Any]): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        Dict[str, Any]: Validated options for the feature.
     """
     schema = CreateIssueOptionsSchema()
     data = dict(opts)
@@ -50,9 +56,29 @@ def prompt_create_issue_options(opts: Dict[str, Any], jira=None) -> Dict[str, An
                 rich_error(f"Input validation error for '{field}': {message}", suggestion)
             continue
 
-def write_create_issue_file(filename: str, issue_key: str, summary: str, user_email=None, batch_index=None, unique_suffix=None, context=None, issue=None) -> None:
+def write_create_issue_file(
+    filename: str,
+    issue_key: str,
+    summary: str,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None,
+    context: dict = None,
+    issue: dict = None
+) -> None:
     """
-    Write a Markdown file for a created issue, with a report header, summary, and standardized layout.
+    Write a Markdown file for a created Jira issue, including a report header, summary, and standardized layout.
+    Args:
+        filename (str): Output file path.
+        issue_key (str): Key of the created issue.
+        summary (str): Summary of the created issue.
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+        context (dict, optional): Additional context for logging.
+        issue (dict, optional): Full issue data from Jira.
+    Returns:
+        None. Writes a Markdown report to disk.
     """
     from jirassicpack.config import ConfigLoader
     jira_conf = ConfigLoader().get_jira_config()
@@ -139,10 +165,27 @@ def write_create_issue_file(filename: str, issue_key: str, summary: str, user_em
         glossary=glossary,
         next_steps=next_steps
     )
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(report)
+    output_path = filename
+    md_file = MdUtils(file_name=output_path, title="Create Issue Report")
+    md_file.new_line(f"_Generated: {datetime.now()}_")
+    md_file.new_header(level=2, title="Summary")
+    md_file.new_line(report)
+    md_file.create_md_file()
+    info(f"🦖 Create issue report written to {output_path}")
 
-def write_create_issue_json(filename: str, issue: dict, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
+def write_create_issue_json(filename: str, issue: dict, user_email: str = None, batch_index: int = None, unique_suffix: str = None, context: dict = None) -> None:
+    """
+    Write the created issue details to a JSON file for record-keeping.
+    Args:
+        filename (str): Output file path.
+        issue (dict): Issue data from Jira.
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+        context (dict, optional): Additional context for logging.
+    Returns:
+        None. Writes a JSON file to disk.
+    """
     try:
         with open(filename, 'w') as f:
             json.dump(issue, f, indent=2)
@@ -150,7 +193,18 @@ def write_create_issue_json(filename: str, issue: dict, user_email=None, batch_i
     except Exception as e:
         error(f"Failed to write created issue JSON file: {e}", extra=context)
 
-def create_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
+def create_issue(jira: Any, params: Dict[str, Any], user_email: str = None, batch_index: int = None, unique_suffix: str = None) -> None:
+    """
+    Main feature entrypoint for creating a Jira issue. Handles validation, creation, and report writing.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (Dict[str, Any]): Parameters for the issue (project, summary, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes Markdown and JSON reports to disk.
+    """
     correlation_id = params.get('correlation_id')
     context = build_context("create_issue", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()

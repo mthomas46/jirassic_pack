@@ -1,3 +1,7 @@
+"""
+io.py
+This module provides all CLI I/O utilities for Jirassic Pack, including prompts, output formatting, file writing, validation, and rich Jurassic Park–themed UX. All user interaction, output, and report generation is handled here.
+"""
 import os
 import sys
 import questionary
@@ -309,7 +313,7 @@ def get_option(options, key, prompt=None, default=None, choices=None, required=F
                 else:
                     message = str(err)
                 rich_error(f"Input validation error: {message}", suggestion)
-                value = None
+                continue
         if value:
             return value
     while True:
@@ -585,3 +589,20 @@ def render_markdown_report_template(
 
 {glossary}
 """ 
+
+def status_emoji(status: str) -> str:
+    """
+    Map a Jira status string to a corresponding emoji for visual reporting.
+    Args:
+        status (str): The status name (e.g., 'Done', 'In Progress').
+    Returns:
+        str: Emoji representing the status.
+    """
+    s = status.lower() if status else ''
+    if s in ['done', 'closed', 'resolved']:
+        return '✅'
+    elif s in ['in progress', 'in review', 'doing']:
+        return '🟡'
+    elif s in ['blocked', 'on hold', 'overdue']:
+        return '��'
+    return '⬜️' 

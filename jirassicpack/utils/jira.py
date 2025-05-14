@@ -1,3 +1,8 @@
+"""
+jirassicpack.utils.jira
+
+All Jira API helpers, user/field/transition selectors, and interactive search utilities for the Jirassic Pack CLI. Provides robust, user-friendly selection and validation for all Jira-related CLI operations.
+"""
 import questionary
 from typing import Any, Dict, Optional, Tuple, List
 import os

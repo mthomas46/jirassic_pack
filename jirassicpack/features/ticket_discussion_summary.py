@@ -1,5 +1,5 @@
 import os
-from jirassicpack.utils.io import ensure_output_dir, info, error, spinner, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, render_markdown_report_template
+from jirassicpack.utils.io import ensure_output_dir, info, error, spinner, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, render_markdown_report_template, status_emoji
 from jirassicpack.utils.logging import contextual_log
 from jirassicpack.utils.io import safe_get
 import openai
@@ -12,21 +12,37 @@ from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
 from jirassicpack.config import ConfigLoader
 from jirassicpack.utils.fields import BaseOptionsSchema
+from mdutils.mdutils import MdUtils
+from typing import Any
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 llm_config = ConfigLoader().get_llm_config()
 
-def call_local_llm_text(prompt):
+def call_local_llm_text(prompt: str) -> str:
+    """
+    Call the local LLM HTTP API to generate a text response for a given prompt.
+    Args:
+        prompt (str): The prompt to send to the LLM.
+    Returns:
+        str: The LLM's response text.
+    """
     url = llm_config['text_url']
     response = requests.post(url, json={"prompt": prompt})
     response.raise_for_status()
     return response.json()["response"]
 
-def call_local_llm_github_pr(repo_name, pr_number, github_token, prompt=None):
+def call_local_llm_github_pr(repo_name: str, pr_number: int, github_token: str, prompt: str = None) -> str:
     """
     Calls the local LLM HTTP API to analyze a GitHub PR directly, letting the local LLM handle the GitHub API call.
     Optionally sends a custom prompt to the local LLM.
+    Args:
+        repo_name (str): GitHub repository name.
+        pr_number (int): Pull request number.
+        github_token (str): GitHub API token.
+        prompt (str, optional): Custom prompt for the LLM.
+    Returns:
+        str: The LLM's response text.
     """
     url = llm_config['github_url']
     payload = {
@@ -40,10 +56,14 @@ def call_local_llm_github_pr(repo_name, pr_number, github_token, prompt=None):
     response.raise_for_status()
     return response.json()["response"]
 
-def call_local_llm_file(file_path):
+def call_local_llm_file(file_path: str) -> str:
     """
     Sends a file to the local LLM HTTP API for analysis via the /generate/file endpoint.
     The file is uploaded as multipart/form-data.
+    Args:
+        file_path (str): Path to the file to analyze.
+    Returns:
+        str: The LLM's response text.
     """
     url = "http://localhost:5000/generate/file"
     with open(file_path, "rb") as f:
@@ -52,9 +72,13 @@ def call_local_llm_file(file_path):
     response.raise_for_status()
     return response.json()["response"]
 
-def select_jira_issues(jira):
+def select_jira_issues(jira: Any) -> list:
     """
     Interactive multi-issue selection: search, pick, or enter manually. Returns a list of issue keys.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+    Returns:
+        list: List of selected issue keys.
     """
     issues = []
     while True:
@@ -96,10 +120,25 @@ def select_jira_issues(jira):
                     issues.append(key)
     return issues
 
-def ticket_discussion_summary(jira, params, user_email=None, batch_index=None, unique_suffix=None):
+def ticket_discussion_summary(
+    jira: Any,
+    params: dict,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None
+) -> None:
     """
-    Summarize one or more Jira tickets' discussion and resolution using LLM.
-    Now uses standardized Markdown report template.
+    Generate a summary report of a Jira ticket's discussion, including comments and action items.
+    Outputs a Markdown report with detailed sections and visual enhancements.
+
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (dict): Parameters for the summary (issue key, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes a Markdown report to disk.
     """
     issue_keys = params.get("issue_keys") or ([params["issue_key"]] if "issue_key" in params else [])
     output_dir = params.get("output_dir", "output")
@@ -111,6 +150,10 @@ def ticket_discussion_summary(jira, params, user_email=None, batch_index=None, u
                 issue = jira.get_task(issue_key)
         except Exception as e:
             error(f"Failed to fetch issue: {e}", extra=context)
+            continue
+        if not issue or not issue.get('fields'):
+            info(f"🦖 See, Nobody Cares. No data found for issue {issue_key}.", extra=context)
+            contextual_log('info', f"🦖 See, Nobody Cares. No data found for issue {issue_key}.", extra=context)
             continue
         fields = issue.get("fields", {})
         description = fields.get("description", "")
@@ -177,16 +220,32 @@ def ticket_discussion_summary(jira, params, user_email=None, batch_index=None, u
             next_steps=next_steps
         )
         filename = os.path.join(output_dir, f"ticket_discussion_summary_{issue_key}.md")
-        with open(filename, 'w') as f:
-            f.write(report)
+        md_file = MdUtils(file_name=filename, title="Ticket Discussion Summary Report")
+        md_file.new_line(f"_Generated: {datetime.now()}_")
+        md_file.new_header(level=2, title="Summary")
+        md_file.new_line(report)
+        md_file.create_md_file()
         info(f"💬 Ticket discussion summary written to {filename}", extra=context)
+    except Exception as e:
+        if 'list index out of range' in str(e):
+            info("🦖 See, Nobody Cares. No data found for the given issue.", extra=context)
+            contextual_log('info', "🦖 See, Nobody Cares. No data found for the given issue.", extra=context)
+            return
+        contextual_log('error', f"💬 [Ticket Discussion Summary] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=params, extra=context)
+        error(f"💬 [Ticket Discussion Summary] Exception: {e}", extra=context)
+        raise
 
 class TicketDiscussionSummaryOptionsSchema(BaseOptionsSchema):
     issue_keys = fields.List(fields.Str(), required=True)
 
-def prompt_ticket_discussion_summary_options(opts, jira=None):
+def prompt_ticket_discussion_summary_options(opts: dict, jira: Any = None) -> dict:
     """
     Prompt for ticket discussion summary options, supporting multi-issue selection.
+    Args:
+        opts (dict): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        dict: Validated options for the feature.
     """
     schema = TicketDiscussionSummaryOptionsSchema()
     while True:

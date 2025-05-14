@@ -1,21 +1,28 @@
 import os
 import questionary
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_required, validate_date, safe_get, write_markdown_file, require_param, render_markdown_report, make_output_filename, render_markdown_report_template
+from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_required, validate_date, safe_get, write_markdown_file, require_param, render_markdown_report, make_output_filename, render_markdown_report_template, status_emoji
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.features.time_tracking_worklogs import select_jira_user
 from datetime import datetime
 import time
 from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
+from mdutils.mdutils import MdUtils
+from typing import Any
 
 class SummarizeTicketsOptionsSchema(Schema):
     user = fields.Str(required=True)
     start_date = fields.Date(required=True)
     end_date = fields.Date(required=True)
 
-def prompt_summarize_tickets_options(options, jira=None):
+def prompt_summarize_tickets_options(options: dict, jira: Any = None) -> dict:
     """
     Prompt for summarize tickets options, always requiring explicit user selection. Config/env value is only used if the user selects it.
+    Args:
+        options (dict): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        dict: Validated options for the feature.
     """
     info(f"[DEBUG] prompt_summarize_tickets_options called. jira is {'present' if jira else 'None'}. options: {options}")
     config_user = options.get('user') or os.environ.get('JIRA_USER')
@@ -89,11 +96,24 @@ def prompt_summarize_tickets_options(options, jira=None):
         'acceptance_criteria_field': ac_field
     }
 
-def summarize_tickets(jira, params, user_email=None, batch_index=None, unique_suffix=None):
+def summarize_tickets(
+    jira: Any,
+    params: dict,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None
+) -> None:
     """
-    Summarize tickets for a user or team and write to a Markdown file.
-    Enhanced: Orders tickets by issue key, groups by issue type, adds subsections, and details who the report was run on.
-    Now uses standardized Markdown report template.
+    Generate a summary report of Jira tickets based on the provided parameters.
+    Fetches issues, groups by type, and outputs a Markdown report with summary, action items, top assignees, and more.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (dict): Parameters for the summary (dates, filters, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes a Markdown report to disk.
     """
     context = build_context("summarize_tickets", user_email, batch_index, unique_suffix)
     try:
@@ -132,6 +152,10 @@ def summarize_tickets(jira, params, user_email=None, batch_index=None, unique_su
         except Exception as e:
             contextual_log('error', f"📝 [Summarize Tickets] Failed to fetch issues: {e}", exc_info=True, operation="api_call", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='summarize_tickets')
             error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
+            return
+        if not issues:
+            info("🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context)
+            contextual_log('info', "🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='summarize_tickets')
             return
         total_issues = len(issues)
         # Order by issue key
@@ -184,15 +208,6 @@ def summarize_tickets(jira, params, user_email=None, batch_index=None, unique_su
         related_links += "- [Jira Dashboard](https://your-domain.atlassian.net)\n"
         # Grouped issue sections
         grouped_sections = ""
-        def status_emoji(status):
-            s = status.lower()
-            if s in ['done', 'closed', 'resolved']:
-                return '✅'
-            elif s in ['in progress', 'in review', 'doing']:
-                return '🟡'
-            elif s in ['blocked', 'on hold']:
-                return '🔴'
-            return '⬜️'
         for itype, group in grouped.items():
             anchor = itype.lower().replace(' ', '-')
             grouped_sections += f"\n## {itype} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
@@ -214,28 +229,31 @@ def summarize_tickets(jira, params, user_email=None, batch_index=None, unique_su
         # Compose final report
         params_list = [("user", display_name), ("start", start_date), ("end", end_date)]
         filename = make_output_filename("summarize_tickets", params_list, output_dir)
-        report = render_markdown_report_template(
-            report_header=header,
-            table_of_contents=toc,
-            report_summary=summary_table,
-            action_items=action_items,
-            top_n_lists=top_n_lists,
-            related_links=related_links,
-            grouped_issue_sections=grouped_sections,
-            export_metadata=export_metadata,
-            glossary=glossary,
-            next_steps=next_steps
-        )
-        with open(filename, 'w') as f:
-            f.write(report)
-        contextual_log('info', f"📝 [Summarize Tickets] Summary report written to {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='summarize_tickets')
-        info(f"📝 Summary report written to {filename}", extra=context)
+        md_file = MdUtils(file_name=filename, title="Ticket Summary Report")
+        md_file.new_line(f"_Generated: {datetime.now()}_")
+        md_file.new_header(level=2, title="Summary")
+        md_file.new_line(header)
+        md_file.new_line(toc)
+        md_file.new_line(summary_table)
+        md_file.new_line(action_items)
+        md_file.new_line(top_n_lists)
+        md_file.new_line(related_links)
+        md_file.new_line(grouped_sections)
+        md_file.new_line(export_metadata)
+        md_file.new_line(glossary)
+        md_file.new_line(next_steps)
+        md_file.create_md_file()
+        info(f"🦖 Ticket summary report written to {filename}")
         duration = int((time.time() - context.get('start_time', 0)) * 1000) if context.get('start_time') else None
         contextual_log('info', f"📝 [Summarize Tickets] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}).", operation="feature_end", status="success", params=redact_sensitive(params), extra=context, feature='summarize_tickets')
     except KeyboardInterrupt:
         contextual_log('warning', "📝 [Summarize Tickets] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context, feature='summarize_tickets')
         info("Graceful exit from Summarize Tickets feature.", extra=context)
     except Exception as e:
+        if 'list index out of range' in str(e):
+            info("🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context)
+            contextual_log('info', "🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='summarize_tickets')
+            return
         contextual_log('error', f"📝 [Summarize Tickets] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='summarize_tickets')
         error(f"📝 [Summarize Tickets] Exception: {e}", extra=context)
         raise 

@@ -30,33 +30,42 @@ console = Console(theme=JURASSIC_THEME)
 JURASSIC_ICON = "🦖"
 
 
-def rich_info(message):
+def rich_info(message: str) -> None:
+    """Print a Jurassic Park–themed info message."""
     console.print(f"{JURASSIC_ICON} [info]{message}[/info]")
 
-def rich_warning(message):
+def rich_warning(message: str) -> None:
+    """Print a Jurassic Park–themed warning message."""
     console.print(f"{JURASSIC_ICON} [warning]{message}[/warning]")
 
-def rich_error(message, suggestion=None):
+def rich_error(message: str, suggestion: str = None) -> None:
     """
     Print a Jurassic Park–themed error message with optional suggestion/example.
+    Args:
+        message (str): The error message to display.
+        suggestion (str, optional): An optional hint or example to display.
     """
     error_text = f"🦖 {message}"
     if suggestion:
         error_text += f"\n[bold yellow]Hint:[/] {suggestion}"
     console.print(Panel(Text(error_text, style="bold red"), title="[bold red]Error![/]", border_style="red"))
 
-def rich_success(message):
+def rich_success(message: str) -> None:
+    """Print a Jurassic Park–themed success message."""
     console.print(f"{JURASSIC_ICON} [success]{message}[/success]")
 
-def rich_prompt_text(message, default=None):
+def rich_prompt_text(message: str, default: str = None) -> str:
+    """Prompt the user for text input with a Jurassic Park–themed message."""
     prompt_msg = f"{JURASSIC_ICON} [prompt]{message}[/prompt]"
     return Prompt.ask(prompt_msg, default=default)
 
-def rich_prompt_confirm(message, default=False):
+def rich_prompt_confirm(message: str, default: bool = False) -> bool:
+    """Prompt the user for confirmation with a Jurassic Park–themed message."""
     prompt_msg = f"{JURASSIC_ICON} [prompt]{message}[/prompt]"
     return Confirm.ask(prompt_msg, default=default)
 
-def rich_panel(message, title=None, style="banner"):
+def rich_panel(message: str, title: str = None, style: str = "banner") -> None:
+    """Print a rich panel with a Jurassic Park–themed style."""
     console.print(Panel(message, title=title, style=style, box=box.ROUNDED))
 
 # Jurassic Park–themed panels and Easter eggs

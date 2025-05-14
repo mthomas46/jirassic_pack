@@ -3,7 +3,7 @@
 # It prompts for user, start/end dates, fetches completed issues, and outputs a Markdown report with a metrics table.
 
 from datetime import datetime
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info, write_markdown_file, make_output_filename, render_markdown_report_template
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info, write_markdown_file, make_output_filename, render_markdown_report_template, status_emoji
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user
 from jirassicpack.utils.io import get_option, validate_required, validate_date, error, safe_get, require_param, render_markdown_report
@@ -17,6 +17,7 @@ from marshmallow import Schema, fields, ValidationError, pre_load
 from jirassicpack.utils.rich_prompt import rich_error
 from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
 from jirassicpack.config import ConfigLoader
+from mdutils.mdutils import MdUtils
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,16 @@ class AdvancedMetricsOptionsSchema(BaseOptionsSchema):
                 data[k] = v.strip()
         return data
 
-def prompt_advanced_metrics_options(options: Dict[str, Any], jira=None) -> Dict[str, Any]:
+def prompt_advanced_metrics_options(options: Dict[str, Any], jira: Any = None) -> Dict[str, Any]:
     """
     Prompt for advanced metrics options using Marshmallow schema for validation and normalization.
     Prompts for user, start/end dates, and output directory.
     Returns a validated dictionary of all options needed for advanced metrics.
+    Args:
+        options (Dict[str, Any]): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        Dict[str, Any]: Validated options for the feature.
     """
     schema = AdvancedMetricsOptionsSchema()
     data = dict(options)
@@ -78,12 +84,25 @@ def prompt_advanced_metrics_options(options: Dict[str, Any], jira=None) -> Dict[
                 rich_error(f"Input validation error for '{field}': {message}", suggestion)
             continue
 
-def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
+def advanced_metrics(
+    jira: Any,
+    params: Dict[str, Any],
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None
+) -> None:
     """
-    Output cycle time, lead time, and a simple burndown table to Markdown.
-    Prompts for user and timeframe, fetches completed issues, and calculates metrics for each.
-    Outputs a Markdown report with a metrics table for analysis.
-    Handles errors for missing required options or failed API calls.
+    Generate an advanced metrics report for Jira issues, including bottleneck analysis, overdue issues, and top assignees.
+    Outputs a Markdown report with detailed sections and visual enhancements.
+
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (Dict[str, Any]): Parameters for the report (dates, filters, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes a Markdown report to disk.
     """
     context = build_context("advanced_metrics", user_email, batch_index, unique_suffix)
     start_time = time.time()
@@ -116,6 +135,10 @@ def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_i
         except Exception as e:
             contextual_log('error', f"📊 [Advanced Metrics] Failed to fetch issues: {e}", exc_info=True, operation="api_call", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
             error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context, feature='advanced_metrics')
+            return
+        if not issues:
+            info("🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='advanced_metrics')
+            contextual_log('info', "🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='advanced_metrics')
             return
         # Try to get display name/accountId for header
         display_name = user
@@ -172,15 +195,6 @@ def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_i
         else:
             action_items += "No overdue issues!\n"
         # Visual enhancements: status emoji
-        def status_emoji(status):
-            s = status.lower()
-            if s in ['done', 'closed', 'resolved']:
-                return '✅'
-            elif s in ['in progress', 'in review', 'doing']:
-                return '🟡'
-            elif s in ['blocked', 'on hold']:
-                return '🔴'
-            return '⬜️'
         # Top N lists
         assignees = [safe_get(i, ['fields', 'assignee', 'displayName'], '') for group in grouped.values() for i in group]
         top_assignees = Counter(assignees).most_common(5)
@@ -242,10 +256,12 @@ def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_i
         )
         # Write to file
         filename = make_output_filename(output_dir, f"advanced_metrics_{user_email}_{start_date}_{end_date}_{unique_suffix}")
-        with open(filename, 'w', encoding='utf-8') as f:
-            f.write(report)
-        # Enhanced output file write log
-        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='advanced_metrics')
+        md_file = MdUtils(file_name=filename, title="Advanced Metrics Report")
+        md_file.new_line(f"_Generated: {datetime.now()}_")
+        md_file.new_header(level=2, title="Summary")
+        md_file.new_line(report)
+        md_file.create_md_file()
+        info(f"🦖 Advanced metrics report written to {filename}")
         # Enhanced feature end log
         duration = int((time.time() - start_time) * 1000)
         contextual_log('info', f"📊 [advanced_metrics] Feature complete | Suffix: {unique_suffix}", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='advanced_metrics')
@@ -253,6 +269,10 @@ def advanced_metrics(jira: Any, params: Dict[str, Any], user_email=None, batch_i
         contextual_log('warning', "[advanced_metrics] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
         info("Graceful exit from Advanced Metrics feature.", extra=context, feature='advanced_metrics')
     except Exception as e:
+        if 'list index out of range' in str(e):
+            info("🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='advanced_metrics')
+            contextual_log('info', "🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='advanced_metrics')
+            return
         contextual_log('error', f"[advanced_metrics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
         error(f"[advanced_metrics] Exception: {e}", extra=context, feature='advanced_metrics')
         raise 

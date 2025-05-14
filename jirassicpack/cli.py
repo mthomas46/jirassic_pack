@@ -34,6 +34,7 @@ from jirassicpack.utils.rich_prompt import (
     panel_hold_onto_your_butts, panel_big_pile_of_errors, panel_jurassic_ascii, panel_nobody_cares,
     panel_crazy_son_of_a, panel_welcome_dr, panel_combined_welcome
 )
+from mdutils.mdutils import MdUtils
 
 load_dotenv()
 
@@ -210,8 +211,16 @@ def register_features():
 FEATURE_GROUPS = {
     "Test Connection": [
         ("🧪 Test connection to Jira", "test_connection"),
-        ("🦖 Test Local LLM", "test_local_llm"),
+    ],
+    "Local LLM Tools": [
         ("🦖 Start Local LLM Server", "start_local_llm_server"),
+        ("🛑 Stop Local LLM Server", "stop_local_llm_server"),
+        ("🪵 View Local LLM Logs", "view_local_llm_logs"),
+        ("🪵 View Ollama Server Log", "view_ollama_server_log"),
+        ("👀 Live Tail Ollama Server Log", "live_tail_ollama_server_log"),
+        ("🔍 Search Ollama Server Log", "search_ollama_server_log"),
+        ("🧹 Filter Ollama Server Log", "filter_ollama_server_log"),
+        ("🦖 Test Local LLM", "test_local_llm"),
         ("👀 Live Tail Local LLM Logs", "live_tail_local_llm_logs"),
     ],
     "Issues & Tasks": [
@@ -248,6 +257,7 @@ FEATURE_GROUPS = {
     ],
     "Logs & Diagnostics": [
         ("🔍 Search logs for points of interest", "log_parser"),
+        ("🦖 Analyze Logs and Generate Report", "analyze_logs_and_generate_report"),
     ],
     "Preferences": [
         ("⚙️ Get mypreferences", "get_mypreferences"),
@@ -363,11 +373,19 @@ def main() -> None:
                     contextual_log('info', f"🦖 [CLI] User exited from main menu.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
                     panel_nobody_cares()
                     rich_info("🦖 CLI halted. User exited from main menu.")
+                    try:
+                        stop_local_llm_server()
+                    except Exception as e:
+                        error(f"[EXIT] Failed to stop local LLM server: {e}")
                     return
                 contextual_log('info', f"🦖 [CLI] User selected feature '{action}' for user {jira_conf.get('email')}", extra={"feature": action, "user": jira_conf.get('email'), "batch": None, "suffix": None})
                 run_feature(action, jira, options, user_email=jira_conf.get('email'))
     except Exception as e:
         rich_error(f"Fatal error: {e}")
+        try:
+            stop_local_llm_server()
+        except Exception as e:
+            error(f"[EXIT] Failed to stop local LLM server: {e}")
 
 def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str = None, batch_index: int = None, unique_suffix: str = None) -> None:
     update_llm_menu()
@@ -401,6 +419,11 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         "🔎 Search issues": "search_issues",
         "📄 Ticket Discussion Summary": "ticket_discussion_summary",
         "👀 Live Tail Local LLM Logs": "live_tail_local_llm_logs",
+        "🪵 View Ollama Server Log": "view_ollama_server_log",
+        "👀 Live Tail Ollama Server Log": "live_tail_ollama_server_log",
+        "🔍 Search Ollama Server Log": "search_ollama_server_log",
+        "🧹 Filter Ollama Server Log": "filter_ollama_server_log",
+        "🦖 Analyze Logs and Generate Report": "analyze_logs_and_generate_report",
     }
     key = menu_to_key.get(feature, feature)
     context = {"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
@@ -560,6 +583,21 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         return
     if key == "live_tail_local_llm_logs":
         live_tail_local_llm_logs()
+        return
+    if key == "view_ollama_server_log":
+        view_ollama_server_log()
+        return
+    if key == "live_tail_ollama_server_log":
+        live_tail_ollama_server_log()
+        return
+    if key == "search_ollama_server_log":
+        search_ollama_server_log()
+        return
+    if key == "filter_ollama_server_log":
+        filter_ollama_server_log()
+        return
+    if key == "analyze_logs_and_generate_report":
+        analyze_logs_and_generate_report()
         return
     # Only now check for FEATURE_REGISTRY
     if key not in FEATURE_REGISTRY:
@@ -724,11 +762,14 @@ def get_llm_status():
 # Update menu with status indicator
 def update_llm_menu():
     status = get_llm_status()
-    FEATURE_GROUPS["Test Connection"] = [
-        ("🧪 Test connection to Jira", "test_connection"),
+    FEATURE_GROUPS["Local LLM Tools"] = [
         (f"🦖 Start Local LLM Server {status}", "start_local_llm_server"),
         ("🛑 Stop Local LLM Server", "stop_local_llm_server"),
         ("🪵 View Local LLM Logs", "view_local_llm_logs"),
+        ("🪵 View Ollama Server Log", "view_ollama_server_log"),
+        ("👀 Live Tail Ollama Server Log", "live_tail_ollama_server_log"),
+        ("🔍 Search Ollama Server Log", "search_ollama_server_log"),
+        ("🧹 Filter Ollama Server Log", "filter_ollama_server_log"),
         ("🦖 Test Local LLM", "test_local_llm"),
         ("👀 Live Tail Local LLM Logs", "live_tail_local_llm_logs"),
     ]
@@ -736,72 +777,144 @@ def update_llm_menu():
 update_llm_menu()
 
 def start_local_llm_server():
-    print("🦖 Starting local LLM server...")
+    info("🦖 Starting local LLM server...")
+    # Check if the server is already running
+    try:
+        resp = requests.get("http://localhost:5000/health", timeout=2)
+        if resp.status_code == 200:
+            info("[INFO] Local LLM server is already running at http://localhost:5000.")
+            logger.info("[LLM] Local LLM server already running at http://localhost:5000.")
+            return
+    except Exception:
+        pass
     if not shutil.which("ollama"):
-        print("[ERROR] 'ollama' is not installed or not in PATH.")
+        error("[ERROR] 'ollama' is not installed or not in PATH.")
         return
     if not is_process_running("ollama"): 
         try:
             subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print("Started 'ollama serve' in the background.")
+            info("Started 'ollama serve' in the background.")
         except Exception as e:
-            print(f"[ERROR] Failed to start 'ollama serve': {e}")
+            error(f"[ERROR] Failed to start 'ollama serve': {e}")
     else:
-        print("'ollama serve' is already running.")
+        info("'ollama serve' is already running.")
     import os
     ollama_dir = os.path.abspath(os.path.join(os.getcwd(), "../Ollama7BPoc"))
     http_api_path = os.path.join(ollama_dir, "http_api.py")
-    if not os.path.exists(http_api_path):
-        print(f"[ERROR] Could not find http_api.py at {http_api_path}")
+    fallback_api_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/http_api.py"
+    fallback_api_dir = "/Users/mykalthomas/Documents/work/Ollama7BPoc"
+    info(f"[LLM] Checking dynamic path: {http_api_path}")
+    logger.info(f"[LLM] Checking dynamic path: {http_api_path}")
+    info(f"[LLM] Checking user-provided absolute path: {fallback_api_path}")
+    logger.info(f"[LLM] Checking user-provided absolute path: {fallback_api_path}")
+    if os.path.exists(http_api_path):
+        api_path = http_api_path
+        api_dir = ollama_dir
+        info(f"[LLM] Using dynamic path for http_api.py: {api_path}")
+        logger.info(f"[LLM] Using dynamic path for http_api.py: {api_path}")
+    elif os.path.exists(fallback_api_path):
+        api_path = fallback_api_path
+        api_dir = fallback_api_dir
+        info(f"[LLM] Using user-provided absolute path for http_api.py: {api_path}")
+        logger.info(f"[LLM] Using user-provided absolute path for http_api.py: {api_path}")
+    else:
+        error(f"[LLM] Could not find http_api.py at {http_api_path} or {fallback_api_path}")
+        logger.error(f"[LLM] Could not find http_api.py at {http_api_path} or {fallback_api_path}")
         return
     if not is_process_running("http_api.py"):
         try:
-            subprocess.Popen(["python", http_api_path], cwd=ollama_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print("Started 'http_api.py' in the background.")
+            info(f"[LLM] Attempting to start http_api.py from {api_path} (cwd={api_dir})")
+            logger.info(f"[LLM] Attempting to start http_api.py from {api_path} (cwd={api_dir})")
+            subprocess.Popen(["python", api_path], cwd=api_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            info(f"Started 'http_api.py' in the background from {api_path}.")
+            logger.info(f"[LLM] Started http_api.py in the background from {api_path}.")
         except Exception as e:
-            print(f"[ERROR] Failed to start 'http_api.py': {e}")
+            error(f"[LLM] Failed to start 'http_api.py': {e}")
+            logger.error(f"[LLM] Failed to start 'http_api.py': {e}")
     else:
-        print("'http_api.py' is already running.")
+        info("[LLM] 'http_api.py' is already running.")
+        logger.info("[LLM] 'http_api.py' is already running.")
     # Health check
-    print("Checking local LLM health endpoint...")
+    info("Checking local LLM health endpoint...")
     try:
         for _ in range(10):
             try:
                 resp = requests.get("http://localhost:5000/health", timeout=2)
                 if resp.status_code == 200 and resp.json().get("status") == "ok":
-                    print("🟢 Local LLM health check passed!")
+                    info("🟢 Local LLM health check passed!")
                     break
                 else:
-                    print("[WARN] Health endpoint returned non-ok status.")
+                    info("[WARN] Health endpoint returned non-ok status.")
             except Exception:
-                print("[INFO] Waiting for local LLM to become healthy...")
+                info("[INFO] Waiting for local LLM to become healthy...")
                 time.sleep(1)
         else:
-            print("[ERROR] Local LLM health check failed after waiting.")
+            error("[ERROR] Local LLM health check failed after waiting.")
     except Exception as e:
-        print(f"[ERROR] Health check error: {e}")
-    print("🦖 Local LLM server startup attempted. Use 'Test Local LLM' to verify health.")
+        error(f"[ERROR] Health check error: {e}")
+    info("🦖 Local LLM server startup attempted. Use 'Test Local LLM' to verify health.")
 
 def stop_local_llm_server():
-    print("🛑 Stopping local LLM server...")
+    info("🛑 Stopping local LLM server...")
+    # Try health check, but proceed regardless of result
+    health_running = False
+    try:
+        resp = requests.get("http://localhost:5000/health", timeout=2)
+        if resp.status_code == 200:
+            health_running = True
+    except Exception:
+        pass
     try:
         import psutil
-    except ImportError:
-        print("[ERROR] The 'psutil' package is required for process management. Please install it with 'pip install psutil'.")
-        return
-    stopped = False
-    for proc in psutil.process_iter(['name', 'cmdline']):
-        try:
-            cmd = ' '.join(proc.info['cmdline'])
-            if 'ollama' in cmd or 'http_api.py' in cmd:
+        import os
+        candidates = []
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmd = ' '.join(proc.info['cmdline'])
+                if ('ollama' in cmd or 'http_api.py' in cmd or '/Ollama7BPoc/http_api.py' in cmd):
+                    candidates.append(proc)
+            except Exception:
+                continue
+        stopped = False
+        for proc in candidates:
+            try:
+                info(f"Terminating PID {proc.info['pid']}: {proc.info['cmdline']}")
                 proc.terminate()
                 stopped = True
+            except Exception as e:
+                error(f"[ERROR] Could not terminate PID {proc.info['pid']}: {e}")
+        # Optionally, kill by port 5000
+        import subprocess
+        try:
+            output = subprocess.check_output(["lsof", "-i", ":5000", "-t"])
+            pids = set(int(pid) for pid in output.decode().split())
+            for pid in pids:
+                info(f"Killing process on port 5000: PID {pid}")
+                os.kill(pid, 9)
+                stopped = True
         except Exception:
-            continue
-    if stopped:
-        print("🛑 Local LLM server processes terminated.")
+            pass
+        if stopped:
+            info("🛑 Local LLM server processes terminated.")
+        else:
+            info("No local LLM server processes found to stop.")
+    except ImportError:
+        error("[ERROR] The 'psutil' package is required for process management. Please install it with 'pip install psutil'.")
+        return
+    # Safety: health check to confirm server has stopped
+    import time
+    for _ in range(5):
+        try:
+            resp = requests.get("http://localhost:5000/health", timeout=2)
+            if resp.status_code == 200:
+                time.sleep(1)
+            else:
+                break
+        except Exception:
+            info("[INFO] Confirmed: Local LLM server is no longer responding at http://localhost:5000.")
+            break
     else:
-        print("No local LLM server processes found to stop.")
+        info("[WARN] Local LLM server may still be running or is stuck.")
 
 def view_local_llm_logs():
     import os
@@ -899,6 +1012,123 @@ def live_tail_local_llm_logs():
         stop_event.set()
     except Exception as e:
         print(f"[ERROR] Fatal error in live tailing logs: {e}")
+
+def view_ollama_server_log():
+    log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
+    print(f"--- ollama_server.log (last 40 lines) ---")
+    try:
+        with open(log_path, 'r') as f:
+            lines = f.readlines()
+            print(''.join(lines[-40:]))
+    except FileNotFoundError:
+        print(f"No ollama_server.log found at {log_path}.")
+    except Exception as e:
+        print(f"[ERROR] Could not read ollama_server.log: {e}")
+
+def live_tail_ollama_server_log():
+    import time
+    log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
+    print(f"--- Live tailing ollama_server.log (Ctrl+C to stop) ---")
+    try:
+        with open(log_path, 'r') as f:
+            f.seek(0, 2)
+            while True:
+                line = f.readline()
+                if line:
+                    print(line.rstrip())
+                else:
+                    time.sleep(0.5)
+    except FileNotFoundError:
+        print(f"No ollama_server.log found at {log_path}.")
+    except KeyboardInterrupt:
+        print("\nStopped live tailing ollama_server.log.")
+    except Exception as e:
+        print(f"[ERROR] Could not tail ollama_server.log: {e}")
+
+def search_ollama_server_log():
+    log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
+    query = prompt_text("Enter search string for ollama_server.log:")
+    print(f"--- Search results for '{query}' in ollama_server.log ---")
+    try:
+        with open(log_path, 'r') as f:
+            matches = [line for line in f if query.lower() in line.lower()]
+            if matches:
+                print(''.join(matches))
+            else:
+                print("No matches found.")
+    except FileNotFoundError:
+        print(f"No ollama_server.log found at {log_path}.")
+    except Exception as e:
+        print(f"[ERROR] Could not search ollama_server.log: {e}")
+
+def filter_ollama_server_log():
+    log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
+    level = prompt_text("Enter log level to filter by (e.g., INFO, ERROR, WARNING):")
+    print(f"--- ollama_server.log filtered by level '{level.upper()}' ---")
+    try:
+        with open(log_path, 'r') as f:
+            matches = [line for line in f if level.upper() in line]
+            if matches:
+                print(''.join(matches))
+            else:
+                print(f"No lines found with level '{level.upper()}'.")
+    except FileNotFoundError:
+        print(f"No ollama_server.log found at {log_path}.")
+    except Exception as e:
+        print(f"[ERROR] Could not filter ollama_server.log: {e}")
+
+def analyze_logs_and_generate_report():
+    import os
+    import datetime
+    log_files = [
+        ("jirassicpack.log", "Jirassic Pack CLI Log"),
+        ("/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log", "Ollama Server Log"),
+        ("/Users/mykalthomas/Documents/work/Ollama7BPoc/http_api.log", "Local LLM API Log"),
+    ]
+    now = datetime.datetime.now()
+    output_path = f"output/log_analysis_report_{now.strftime('%Y%m%d_%H%M%S')}.md"
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    md_file = MdUtils(file_name=output_path, title="🦖 Log Analysis Report")
+    md_file.new_line(f"_Generated: {now.strftime('%Y-%m-%d %H:%M:%S')}_")
+    md_file.new_line()
+    md_file.new_header(level=2, title="Summary Table")
+    table_data = ["Log File", "Errors", "Warnings", "Info"]
+    summary = []
+    details = []
+    for log_path, label in log_files:
+        errors, warnings, infos = [], [], []
+        if not os.path.exists(log_path):
+            summary.extend([label, "N/A", "N/A", "N/A"])
+            details.append((label, None, None, None, log_path))
+            continue
+        with open(log_path, 'r') as f:
+            for line in f:
+                if 'ERROR' in line:
+                    errors.append(line.strip())
+                elif 'WARN' in line or 'WARNING' in line:
+                    warnings.append(line.strip())
+                elif 'INFO' in line:
+                    infos.append(line.strip())
+        summary.extend([label, str(len(errors)), str(len(warnings)), str(len(infos))])
+        details.append((label, errors, warnings, infos, log_path))
+    rows = len(log_files) + 1
+    md_file.new_table(columns=4, rows=rows, text=table_data + summary, text_align='center')
+    md_file.new_line()
+    for label, errors, warnings, infos, log_path in details:
+        md_file.new_header(level=2, title=label)
+        if errors is None:
+            md_file.new_line(f"File not found: `{log_path}`")
+            md_file.new_line('---')
+            continue
+        if errors:
+            md_file.new_header(level=3, title="Top 5 Errors")
+            md_file.new_list(errors[-5:])
+        if warnings:
+            md_file.new_header(level=3, title="Top 5 Warnings")
+            md_file.new_list(warnings[-5:])
+        md_file.new_line('---')
+    md_file.create_md_file()
+    info(f"🦖 Log analysis report written to {output_path}")
 
 if __name__ == "__main__":
     main() 

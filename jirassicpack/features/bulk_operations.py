@@ -3,7 +3,7 @@
 # It prompts the user for the desired action, the JQL to select issues, and the value for the action (if needed).
 # Results are written to a Markdown report for traceability.
 
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, info_spared_no_expense, prompt_with_validation, info, validate_required, error, render_markdown_report, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, info_spared_no_expense, prompt_with_validation, info, validate_required, error, render_markdown_report, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, status_emoji
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user, get_valid_transition
 from typing import Any, Dict, List, Tuple
@@ -12,10 +12,17 @@ import time
 from marshmallow import Schema, fields, ValidationError, validate
 from jirassicpack.utils.rich_prompt import rich_error
 from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
+from mdutils.mdutils import MdUtils
+from datetime import datetime
 
-def prompt_bulk_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
+def prompt_bulk_options(opts: Dict[str, Any], jira: Any = None) -> Dict[str, Any]:
     """
     Prompt for bulk operation options using Jira-aware helpers for value selection.
+    Args:
+        opts (Dict[str, Any]): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        Dict[str, Any]: Validated options for the feature.
     """
     schema = BulkOptionsSchema()
     while True:
@@ -58,8 +65,35 @@ def prompt_bulk_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
                 rich_error(f"Input validation error for '{field}': {message}", suggestion)
             continue
 
-def write_bulk_report(filename: str, action: str, results: list, user_email=None, batch_index=None, unique_suffix=None, context=None, summary=None) -> None:
+def write_bulk_report(
+    filename: str,
+    action: str,
+    results: list,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None,
+    context: dict = None,
+    summary: list = None
+) -> None:
+    """
+    Write a Markdown report for bulk operations, including action summary and details for each issue.
+    Args:
+        filename (str): Output file path.
+        action (str): Bulk action performed.
+        results (list): List of results or issues.
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+        context (dict, optional): Additional context for logging.
+        summary (list, optional): Summary data for the report.
+    Returns:
+        None. Writes a Markdown report to disk.
+    """
     try:
+        output_path = f"{filename}"
+        md_file = MdUtils(file_name=output_path, title="Bulk Operations Report")
+        md_file.new_line(f"_Generated: {datetime.now()}_")
+        md_file.new_header(level=2, title="Summary")
         summary_section = f"**Bulk Action:** {action}\n\n**Total Issues:** {len(results)}"
         details_section = "| Issue Key | Status | Error Message |\n|-----------|--------|--------------|\n"
         if summary:
@@ -68,22 +102,35 @@ def write_bulk_report(filename: str, action: str, results: list, user_email=None
         else:
             for r in results:
                 details_section += f"| {r} |  |  |\n"
-        content = render_markdown_report(
-            feature="bulk_operations",
-            user=user_email,
-            batch=batch_index,
-            suffix=unique_suffix,
-            feature_title="Bulk Operations",
-            summary_section=summary_section,
-            main_content_section=details_section
-        )
-        with open(filename, 'w') as f:
-            f.write(content)
-        contextual_log('info', f"🦴 Bulk operation report written to {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='bulk_operations')
+        md_file.new_line(summary_section)
+        md_file.new_line(details_section)
+        md_file.create_md_file()
+        info(f"🦖 Bulk operations report written to {output_path}")
     except Exception as e:
         error(f"Failed to write bulk operation report: {e}", extra=context, feature='bulk_operations')
 
-def write_bulk_report_json(filename: str, action: str, summary: list, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
+def write_bulk_report_json(
+    filename: str,
+    action: str,
+    summary: list,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None,
+    context: dict = None
+) -> None:
+    """
+    Write a JSON file for bulk operation results.
+    Args:
+        filename (str): Output file path.
+        action (str): Bulk action performed.
+        summary (list): Summary data for the report.
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+        context (dict, optional): Additional context for logging.
+    Returns:
+        None. Writes a JSON file to disk.
+    """
     try:
         data = {
             "action": action,
@@ -97,7 +144,18 @@ def write_bulk_report_json(filename: str, action: str, summary: list, user_email
     except Exception as e:
         error(f"Failed to write bulk operation JSON file: {e}", extra=context, feature='bulk_operations')
 
-def bulk_operations(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
+def bulk_operations(jira: Any, params: Dict[str, Any], user_email: str = None, batch_index: int = None, unique_suffix: str = None) -> None:
+    """
+    Main feature entrypoint for performing bulk operations on Jira issues. Handles validation, execution, and report writing.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (Dict[str, Any]): Parameters for the operation (action, jql, value, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes Markdown and JSON reports to disk.
+    """
     correlation_id = params.get('correlation_id')
     context = build_context("bulk_operations", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()

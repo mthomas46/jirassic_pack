@@ -10,15 +10,20 @@ class IntegrationOptionsSchema(BaseOptionsSchema):
     integration_jql = fields.Str(required=True, error_messages={"required": "JQL is required for integration scan."}, validate=validate_nonempty)
     # output_dir and unique_suffix are inherited
 
-def prompt_integration_options(options: dict) -> dict:
+def prompt_integration_options(opts: dict, jira: Any = None) -> dict:
     """
-    Prompt for integration options using get_option utility and validate with schema.
+    Prompt for integration options, such as tool selection and action.
+    Args:
+        opts (dict): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        dict: Validated options for the feature.
     """
     schema = IntegrationOptionsSchema()
     while True:
-        jql = get_option(options, 'integration_jql', prompt="🔗 JQL to find issues for integration scan:", required=True)
-        output_dir = get_option(options, 'output_dir', default='output')
-        unique_suffix = options.get('unique_suffix', '')
+        jql = get_option(opts, 'integration_jql', prompt="🔗 JQL to find issues for integration scan:", required=True)
+        output_dir = get_option(opts, 'output_dir', default='output')
+        unique_suffix = opts.get('unique_suffix', '')
         data = {
             'integration_jql': jql,
             'output_dir': output_dir,
@@ -82,7 +87,24 @@ def generate_integration_links(issues: List[Dict[str, Any]]) -> List[Tuple[str, 
                 pr_links.append((key, match))
     return pr_links
 
-def integration_tools(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
+def integration_tools(
+    jira: Any,
+    params: dict,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None
+) -> None:
+    """
+    Main feature entrypoint for integration tools. Handles validation, integration actions, and report writing.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (dict): Parameters for the integration (tool, action, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes a Markdown report to disk.
+    """
     correlation_id = params.get('correlation_id')
     context = build_context("integration_tools", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()

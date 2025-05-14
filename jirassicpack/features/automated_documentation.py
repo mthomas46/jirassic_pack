@@ -3,7 +3,7 @@
 # It prompts the user for the documentation type, project, and relevant filters (version or sprint), then fetches issues and writes a Markdown report.
 
 from typing import Any, Dict, List
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, error, info, info_spared_no_expense, prompt_with_validation, safe_get, write_markdown_file, require_param, render_markdown_report, get_option, make_output_filename, render_markdown_report_template
+from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, error, info, info_spared_no_expense, prompt_with_validation, safe_get, write_markdown_file, require_param, render_markdown_report, get_option, make_output_filename, render_markdown_report_template, status_emoji
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import get_valid_project_key
 from marshmallow import Schema, fields, ValidationError, pre_load, validate
@@ -12,6 +12,7 @@ from jirassicpack.utils.fields import ProjectKeyField, BaseOptionsSchema, valida
 from jirassicpack.config import ConfigLoader
 from datetime import datetime
 from collections import defaultdict, Counter
+from mdutils.mdutils import MdUtils
 
 class AutomatedDocOptionsSchema(BaseOptionsSchema):
     doc_type = fields.Str(required=True, error_messages={"required": "Documentation type is required."}, validate=validate.OneOf(['Release notes', 'Changelog', 'Sprint Review']))
@@ -20,11 +21,16 @@ class AutomatedDocOptionsSchema(BaseOptionsSchema):
     sprint = fields.Str(load_default='')
     # output_dir and unique_suffix are inherited
 
-def prompt_automated_doc_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
+def prompt_automated_doc_options(opts: Dict[str, Any], jira: Any = None) -> Dict[str, Any]:
     """
     Prompt for automated documentation options using Marshmallow schema for validation and normalization.
     Prompts for doc_type, project, version, sprint, and output directory.
     Returns a validated dictionary of all options needed for automated documentation.
+    Args:
+        opts (Dict[str, Any]): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        Dict[str, Any]: Validated options for the feature.
     """
     schema = AutomatedDocOptionsSchema()
     data = dict(opts)
@@ -50,7 +56,28 @@ def prompt_automated_doc_options(opts: Dict[str, Any], jira=None) -> Dict[str, A
                 rich_error(f"Input validation error for '{field}': {message}", suggestion)
             continue
 
-def write_automated_doc_file(filename: str, doc_type: str, issues: list, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
+def write_automated_doc_file(
+    filename: str,
+    doc_type: str,
+    issues: list,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None,
+    context: dict = None
+) -> None:
+    """
+    Write a Markdown file for automated documentation, grouping issues by type and including summary tables and metadata.
+    Args:
+        filename (str): Output file path.
+        doc_type (str): Type of documentation (e.g., Release notes).
+        issues (list): List of Jira issues.
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+        context (dict, optional): Additional context for logging.
+    Returns:
+        None. Writes a Markdown report to disk.
+    """
     try:
         jira_conf = ConfigLoader().get_jira_config()
         base_url = jira_conf['url'].rstrip('/')
@@ -99,15 +126,6 @@ def write_automated_doc_file(filename: str, doc_type: str, issues: list, user_em
         else:
             action_items += "No overdue issues!\n"
         # Visual enhancements: status emoji
-        def status_emoji(status):
-            s = status.lower()
-            if s in ['done', 'closed', 'resolved']:
-                return '✅'
-            elif s in ['in progress', 'in review', 'doing']:
-                return '🟡'
-            elif s in ['blocked', 'on hold']:
-                return '🔴'
-            return '⬜️'
         # Top N lists
         assignees = [safe_get(i, ['fields', 'assignee', 'displayName'], '') for group in grouped.values() for i in group]
         top_assignees = Counter(assignees).most_common(5)
@@ -167,20 +185,39 @@ def write_automated_doc_file(filename: str, doc_type: str, issues: list, user_em
             glossary=glossary,
             next_steps=next_steps
         )
-        with open(filename, 'w', encoding='utf-8') as f:
-            f.write(report)
-        info(f"🦖 Automated documentation written to {filename}", extra=context)
+        output_path = filename
+        md_file = MdUtils(file_name=output_path, title="Automated Documentation Report")
+        md_file.new_line(f"_Generated: {datetime.now()}_")
+        md_file.new_header(level=2, title="Summary")
+        md_file.new_line(report)
+        md_file.create_md_file()
+        info(f"🦖 Automated documentation report written to {output_path}")
     except Exception as e:
         error(f"Failed to write automated documentation file: {e}", extra=context)
 
 def generate_documentation(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Generate documentation content from issues. Returns a list of issues (could be filtered or processed as needed).
+    Args:
+        issues (List[Dict[str, Any]]): List of Jira issues.
+    Returns:
+        List[Dict[str, Any]]: Processed issues for documentation.
     """
     # For now, just return the issues as-is. Extend for custom doc logic.
     return issues
 
-def automated_documentation(jira: Any, params: dict, user_email=None, batch_index=None, unique_suffix=None) -> None:
+def automated_documentation(jira: Any, params: dict, user_email: str = None, batch_index: int = None, unique_suffix: str = None) -> None:
+    """
+    Main feature entrypoint for generating automated documentation from Jira issues. Handles validation, fetching, and report writing.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (dict): Parameters for the documentation (doc_type, project, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes a Markdown report to disk.
+    """
     import time
     correlation_id = params.get('correlation_id')
     context = build_context("automated_documentation", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
@@ -215,6 +252,7 @@ def automated_documentation(jira: Any, params: dict, user_email=None, batch_inde
             return
         if not issues:
             info("🦖 See, Nobody Cares. No issues found for documentation.", extra=context)
+            contextual_log('info', "🦖 See, Nobody Cares. No issues found for documentation.", extra=context)
             return
         params_list = [("project", project), ("doc_type", doc_type), ("version", version), ("sprint", sprint)]
         filename = make_output_filename("automated_doc", params_list, output_dir)
@@ -227,6 +265,10 @@ def automated_documentation(jira: Any, params: dict, user_email=None, batch_inde
         contextual_log('warning', "[automated_documentation] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context)
         info("Graceful exit from Automated Documentation feature.", extra=context)
     except Exception as e:
+        if 'list index out of range' in str(e):
+            info("🦖 See, Nobody Cares. No issues found for documentation.", extra=context)
+            contextual_log('info', "🦖 See, Nobody Cares. No issues found for documentation.", extra=context)
+            return
         contextual_log('error', f"📚 [Automated Documentation] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context)
         error(f"[automated_documentation] Exception: {e}", extra=context)
         raise 

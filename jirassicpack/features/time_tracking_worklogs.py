@@ -160,16 +160,21 @@ def select_jira_user(jira, allow_multiple=False, default_user=None):
             break
     return users
 
-def prompt_time_tracking_options(options: dict) -> dict:
+def prompt_time_tracking_options(opts: dict, jira: Any = None) -> dict:
     """
-    Prompt for time tracking options using get_option utility and validate with schema.
+    Prompt for time tracking options, including user and date range selection.
+    Args:
+        opts (dict): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        dict: Validated options for the feature.
     """
     schema = TimeTrackingOptionsSchema()
-    user = get_option(options, 'user', prompt="Jira Username for worklogs:", required=True)
-    start_date = get_option(options, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
-    end_date = get_option(options, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
-    output_dir = get_option(options, 'output_dir', default='output')
-    unique_suffix = options.get('unique_suffix', '')
+    user = get_option(opts, 'user', prompt="Jira Username for worklogs:", required=True)
+    start_date = get_option(opts, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
+    end_date = get_option(opts, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
+    output_dir = get_option(opts, 'output_dir', default='output')
+    unique_suffix = opts.get('unique_suffix', '')
     data = {
         'user': user,
         'start_date': start_date,
@@ -297,7 +302,24 @@ def generate_worklog_summary(issues: List[Dict[str, Any]], start_date: str, end_
             filtered_issues.append(filtered_issue)
     return filtered_issues
 
-def time_tracking_worklogs(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
+def time_tracking_worklogs(
+    jira: Any,
+    params: dict,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None
+) -> None:
+    """
+    Main feature entrypoint for time tracking and worklog analytics. Handles validation, fetching, and report writing.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (dict): Parameters for the time tracking (user, date range, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes a Markdown report to disk.
+    """
     correlation_id = params.get('correlation_id')
     context = build_context("time_tracking_worklogs", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()

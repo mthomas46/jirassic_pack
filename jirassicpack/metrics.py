@@ -1,21 +1,28 @@
 from datetime import datetime
 import os
 import questionary
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_required, validate_date, safe_get, write_markdown_file, require_param, render_markdown_report, make_output_filename
+from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_required, validate_date, safe_get, write_markdown_file, require_param, render_markdown_report, make_output_filename, status_emoji
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.features.time_tracking_worklogs import select_jira_user
 import time
 from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
+from mdutils.mdutils import MdUtils
+from typing import Any
 
 class GatherMetricsOptionsSchema(Schema):
     user = fields.Str(required=True)
     start_date = fields.Date(required=True)
     end_date = fields.Date(required=True)
 
-def prompt_gather_metrics_options(options, jira=None):
+def prompt_gather_metrics_options(options: dict, jira: Any = None) -> dict:
     """
     Prompt for metrics options, always requiring explicit user selection. Config/env value is only used if the user selects it.
+    Args:
+        options (dict): Options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+    Returns:
+        dict: Validated options for the feature.
     """
     info(f"[DEBUG] prompt_gather_metrics_options called. jira is {'present' if jira else 'None'}. options: {options}")
     config_user = options.get('user') or os.environ.get('JIRA_USER')
@@ -88,10 +95,24 @@ def prompt_gather_metrics_options(options, jira=None):
         'unique_suffix': unique_suffix
     }
 
-def gather_metrics(jira, params, user_email=None, batch_index=None, unique_suffix=None):
+def gather_metrics(
+    jira: Any,
+    params: dict,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None
+) -> None:
     """
-    Gather metrics for a specific user over a timeframe and write to a Markdown file.
-    Enhanced: Orders issues by issue key, groups by issue type, adds subsections, and details who the report was run on.
+    Gather and report metrics for Jira issues based on the provided parameters.
+    Outputs a Markdown report with summary and details.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (dict): Parameters for the metrics (dates, filters, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes a Markdown report to disk.
     """
     context = build_context("gather_metrics", user_email, batch_index, unique_suffix)
     try:
@@ -177,10 +198,27 @@ def gather_metrics(jira, params, user_email=None, batch_index=None, unique_suffi
             summary_section=summary_section,
             main_content_section=details_section
         )
-        with open(filename, 'w') as f:
-            f.write(content)
-        contextual_log('info', f"📈 [Gather Metrics] Metrics report written to {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='gather_metrics')
-        info(f"📈 Metrics report written to {filename}", extra=context)
+        md_file = MdUtils(file_name=filename, title="Metrics Report")
+        md_file.new_line(f"_Generated: {datetime.now()}_")
+        md_file.new_header(level=2, title="Summary")
+        md_file.new_line(summary_section)
+        md_file.new_header(level=2, title="Issue Type Breakdown")
+        for itype, group in grouped.items():
+            md_file.new_line(f"- {itype}: {len(group)}")
+        md_file.new_header(level=2, title="Detailed Sections by Type")
+        for itype, group in grouped.items():
+            md_file.new_header(level=3, title=itype)
+            md_file.new_line("| Key | Summary | Status | Resolved |")
+            md_file.new_line("|-----|---------|--------|----------|")
+            for issue in group:
+                key = issue.get('key', 'N/A')
+                summary = safe_get(issue, ['fields', 'summary'])
+                status = safe_get(issue, ['fields', 'status', 'name'])
+                resolved = safe_get(issue, ['fields', 'resolutiondate'])
+                md_file.new_line(f"| {key} | {summary} | {status} | {resolved} |")
+            md_file.new_line("")
+        md_file.create_md_file()
+        info(f"🦖 Metrics report written to {filename}")
         duration = int((time.time() - context.get('start_time', 0)) * 1000) if context.get('start_time') else None
         contextual_log('info', f"📈 [Gather Metrics] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}).", operation="feature_end", status="success", params=redact_sensitive(params), extra=context, feature='gather_metrics')
     except KeyboardInterrupt:

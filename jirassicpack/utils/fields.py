@@ -1,7 +1,7 @@
 """
 jirassicpack.utils.fields
 
-Custom Marshmallow fields for Jira CLI schemas.
+Custom Marshmallow fields and validators for Jira CLI schemas. Provides reusable field types, normalization, and validation utilities for robust schema-driven CLI input.
 """
 import re
 from marshmallow import fields, ValidationError, Schema, pre_load, validates, validate
@@ -27,7 +27,7 @@ class ProjectKeyField(fields.Str):
             raise ValidationError("Invalid Jira project key format (e.g., DEMO).")
         return value 
 
-def normalize_string(value):
+def normalize_string(value: str) -> str:
     """Trim whitespace and normalize string values."""
     if isinstance(value, str):
         return value.strip()
@@ -56,8 +56,8 @@ class BaseOptionsSchema(Schema):
                     data[k] = v
         return data 
 
-def validate_date(value):
-    """Validate date string is in YYYY-MM-DD format."""
+def validate_date(value: str) -> None:
+    """Validate date string is in YYYY-MM-DD format. Raises ValidationError if invalid."""
     if not isinstance(value, str):
         raise ValidationError("Date must be a string in YYYY-MM-DD format.", "Example: 2024-01-01")
     try:
@@ -65,7 +65,8 @@ def validate_date(value):
     except Exception:
         raise ValidationError("Date must be in YYYY-MM-DD format.", "Example: 2024-01-01")
 
-def validate_nonempty(value):
+def validate_nonempty(value: str) -> None:
+    """Validate that a string is not empty. Raises ValidationError if empty."""
     if not isinstance(value, str) or not value.strip():
         raise ValidationError("This field cannot be empty.", "Please enter a value.")
 
