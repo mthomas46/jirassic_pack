@@ -519,7 +519,7 @@ def analytics_menu(logs: List[Dict[str, Any]]) -> None:
 # =========================
 def log_parser(jira=None, options=None, user_email=None, batch_index=None, unique_suffix=None):
     contextual_log('info', f"log_parser called with jira={jira}, options={options}, user_email={user_email}, batch_index={batch_index}, unique_suffix={unique_suffix}", extra={"feature": "log_parser", "user": user_email, "batch": batch_index, "suffix": unique_suffix})
-    print("\n🦖 Log Parser & Search ��\n")
+    print("\n🦖 Log Parser & Search \n")
     log_file = prompt_text("Path to log file:", default=LOG_FILE)
     logs = parse_logs(log_file)
     if not logs:

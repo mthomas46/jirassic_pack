@@ -1,3 +1,8 @@
+"""
+metrics.py
+
+Gathers and reports metrics for Jira issues, including grouping by type and summary statistics. Provides interactive prompts for user/date selection and outputs professional Markdown reports. Used for analytics and reporting features in Jirassic Pack CLI.
+"""
 from datetime import datetime
 import os
 import questionary

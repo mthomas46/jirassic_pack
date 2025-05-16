@@ -107,10 +107,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger("jirassicpack")
 
-# cli.py
-# This module provides the command-line interface (CLI) entrypoint for the jirassicPack tool.
-# It handles argument parsing, configuration loading, and dispatches to the appropriate feature based on user input or config.
-# Ensures output directories exist and provides a consistent entrypoint for all features.
+"""
+cli.py
+
+Jirassic Pack CLI entrypoint. Provides a robust, menu-driven command-line interface for interacting with Jira, GitHub, and local LLMs. Features include advanced issue management, analytics, reporting, log analysis, and seamless integration with local and cloud LLMs. The CLI is highly modular, themed after Jurassic Park, and supports batch and interactive modes, robust error handling, and beautiful output via rich.
+
+Key features:
+- Modular feature dispatch via menu or config
+- Robust config/environment validation
+- Advanced logging (JSON, rotation, redaction)
+- Local LLM orchestration and health checks
+- Batch and interactive feature execution
+- Jurassic Park–themed UX and output
+- Graceful shutdown and error handling
+"""
 
 # Jurassic Park color palette
 JUNGLE_GREEN = '\033[38;5;34m'
@@ -211,6 +221,7 @@ def register_features():
 FEATURE_GROUPS = {
     "Test Connection": [
         ("🧪 Test connection to Jira", "test_connection"),
+        ("🐙 Test GitHub Connect", "test_github_connect"),
     ],
     "Local LLM Tools": [
         ("🦖 Start Local LLM Server", "start_local_llm_server"),
@@ -393,6 +404,7 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
     contextual_log('debug', f"[DEBUG] run_feature called. feature={feature}, user_email={user_email}, batch_index={batch_index}, unique_suffix={unique_suffix}, options={options}", extra=context)
     menu_to_key = {
         "🧪 Test connection to Jira": "test_connection",
+        "🐙 Test GitHub Connect": "test_github_connect",
         "🦖 Test Local LLM": "test_local_llm",
         "🦖 Start Local LLM Server": "start_local_llm_server",
         "👥 Output all users": "output_all_users",
@@ -429,6 +441,9 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
     context = {"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
     feature_tag = f"[{key}]"
     contextual_log('info', f"🦖 [CLI] run_feature: key={repr(key)}", extra=context)
+    if key == "test_github_connect":
+        test_github_connect()
+        return
     if key == "test_local_llm":
         FEATURE_REGISTRY[key](options, user_email=user_email, batch_index=batch_index, unique_suffix=unique_suffix)
         return
@@ -1129,6 +1144,37 @@ def analyze_logs_and_generate_report():
         md_file.new_line('---')
     md_file.create_md_file()
     info(f"🦖 Log analysis report written to {output_path}")
+
+def test_github_connect(config: dict = None) -> None:
+    """
+    Test connectivity to the GitHub API using the configured token.
+    Fetches the authenticated user and reports success/failure with rich output.
+    Args:
+        config (dict, optional): Config dictionary. If None, loads from ConfigLoader.
+    Returns:
+        None. Prints result to CLI.
+    """
+    if config is None:
+        config = ConfigLoader().get_github_config()
+    token = config.get('token') or os.environ.get('GITHUB_TOKEN')
+    if not token:
+        rich_error("No GitHub token found in config or environment.")
+        return
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+    try:
+        resp = requests.get("https://api.github.com/user", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            user = resp.json()
+            login = user.get('login', 'N/A')
+            name = user.get('name', '')
+            rich_success(f"✅ GitHub connection successful! Authenticated as: {login} {f'({name})' if name else ''}")
+            rich_panel(f"User: {login}\nName: {name or 'N/A'}\nID: {user.get('id', 'N/A')}\nType: {user.get('type', 'N/A')}\nPublic Repos: {user.get('public_repos', 'N/A')}", title="GitHub User Info", style="success")
+        elif resp.status_code == 401:
+            rich_error("❌ GitHub authentication failed. Invalid or expired token.")
+        else:
+            rich_error(f"❌ GitHub API error: {resp.status_code} {resp.text}")
+    except Exception as e:
+        rich_error(f"❌ Exception during GitHub connect test: {e}")
 
 if __name__ == "__main__":
     main() 

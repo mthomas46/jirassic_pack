@@ -6,7 +6,7 @@ logger = logging.getLogger("jirassicpack")
 
 class JiraClient:
     """
-    Handles authentication and requests to the Jira REST API, with retry and timeout support.
+    Handles authentication and requests to the Jira REST API for Jirassic Pack CLI. Provides robust, retry-enabled HTTP methods (GET, POST, PUT), user and issue search, board/sprint listing, and contextual logging. Used as the main API client for all Jira operations in the CLI and features.
     """
     def __init__(self, url, email, api_token, timeout=10, max_retries=3):
         self.base_url = url.rstrip('/')

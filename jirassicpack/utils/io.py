@@ -260,7 +260,7 @@ def prompt_with_validation(prompt, validate_fn=None, error_msg=None, default=Non
                 else:
                     message = str(err)
                 rich_error(f"Input validation error: {message}", suggestion)
-                continue
+                value = None
         # Marshmallow schema validation
         if marshmallow_schema:
             try:
@@ -274,7 +274,7 @@ def prompt_with_validation(prompt, validate_fn=None, error_msg=None, default=Non
                 else:
                     message = str(err)
                 rich_error(f"Input validation error: {message}", suggestion)
-                continue
+                value = None
         if validate_fn and not validate_fn(value):
             rich_error(error_msg or 'Invalid input.')
             continue
@@ -313,7 +313,7 @@ def get_option(options, key, prompt=None, default=None, choices=None, required=F
                 else:
                     message = str(err)
                 rich_error(f"Input validation error: {message}", suggestion)
-                continue
+                value = None
         if value:
             return value
     while True:
