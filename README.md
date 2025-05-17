@@ -863,6 +863,7 @@ pip install -r requirements.txt
 ```
 
 **Key dependencies:**
+- `aiohttp>=3.9.0` (required for Python 3.12 compatibility)
 - `questionary` – Interactive CLI prompts
 - `rich` – Beautiful output, panels, and tracebacks
 - `marshmallow` – Input/config validation
@@ -872,11 +873,19 @@ pip install -r requirements.txt
 - `pyfiglet`, `colorama`, `tqdm`, `yaspin` – Theming, banners, progress
 - `requests`, `PyYAML`, `PyGithub`, `openai` – API and integration
 
+### Python Version
+
+Jirassic Pack is tested and supported on **Python 3.12**. Older versions (e.g., 3.8–3.11) may work, but Python 3.12 is recommended for best compatibility and support.
+
+> **Note:** If you use Python 3.12, you must have `aiohttp>=3.9.0` (already specified in requirements.txt).
+
 ### Virtual Environment (Recommended)
 
+Create and activate a Python 3.12 virtual environment:
+
 ```sh
-python -m venv .venv
-source .venv/bin/activate
+python3.12 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
