@@ -24,6 +24,9 @@ from marshmallow import fields, pre_load
 from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty, validate_date
 from jirassicpack.analytics.helpers import aggregate_issue_stats, make_summary_section, make_breakdown_section, make_reporter_section, build_report_sections
 from jirassicpack.constants import SEE_NOBODY_CARES, FAILED_TO
+from datetime import datetime, timedelta
+from jirassicpack.utils.jira import select_jira_user
+from marshmallow import EXCLUDE
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +39,14 @@ class AdvancedMetricsOptionsSchema(BaseOptionsSchema):
     start_date = fields.Str(required=True, error_messages={"required": "Start date is required."}, validate=validate_date)
     end_date = fields.Str(required=True, error_messages={"required": "End date is required."}, validate=validate_date)
     output_dir = fields.Str(load_default='output')
-    unique_suffix = fields.Str(load_default='')
+    unique_suffix = fields.Str(
+        load_default='',
+        metadata={
+            'prompt': "Optional: Add a short tag to distinguish this report in the filename (e.g., 'Q1', 'test', 'urgent'). Leave blank for default."
+        }
+    )
+    class Meta:
+        unknown = EXCLUDE
 
     @pre_load
     def normalize(self, data, **kwargs):
@@ -57,7 +67,26 @@ def prompt_advanced_metrics_options(options: dict, jira: Any = None) -> dict:
         dict: Validated options for the feature.
     """
     schema = AdvancedMetricsOptionsSchema()
-    return prompt_with_schema(schema, dict(options), jira=jira)
+    data = dict(options)
+    # User selection
+    if jira:
+        info("Please select a Jira user for advanced metrics.")
+        result = select_jira_user(jira)
+        if not (isinstance(result, tuple) and len(result) == 2 and result[1]):
+            info("❌ Aborted advanced metrics prompt.")
+            return None
+        label, user_obj = result
+        data['user'] = user_obj.get('accountId')
+        contextual_log('info', f"[advanced_metrics] User selected: {label} ({data['user']})", extra={'user_obj': user_obj, 'label': label}, feature='advanced_metrics')
+    # Default dates: current month
+    today = datetime.today()
+    first_of_month = today.replace(day=1).strftime('%Y-%m-%d')
+    last_of_month = (today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    last_of_month_str = last_of_month.strftime('%Y-%m-%d')
+    data.setdefault('start_date', first_of_month)
+    data.setdefault('end_date', last_of_month_str)
+    contextual_log('info', f"[advanced_metrics] Date range selected: {data['start_date']} to {data['end_date']}", extra={'start_date': data['start_date'], 'end_date': data['end_date']}, feature='advanced_metrics')
+    return prompt_with_schema(schema, data, jira=jira)
 
 @feature_error_handler('advanced_metrics')
 def advanced_metrics(
@@ -99,16 +128,18 @@ def advanced_metrics(
         end_date = params['end_date']
         ensure_output_dir(output_dir)
         # Fetch more fields for richer analytics
+        fields = ["summary", "created", "resolutiondate", "status", "key", "issuetype", "priority", "duedate", "assignee", "changelog"]
         jql = (
             f"assignee = '{user}' "
             f"AND statusCategory = Done "
             f"AND resolved >= '{start_date}' "
             f"AND resolved <= '{end_date}'"
         )
-        fields = ["summary", "created", "resolutiondate", "status", "key", "issuetype", "priority", "duedate", "assignee", "changelog"]
+        contextual_log('info', f"[advanced_metrics] JQL to be used: {jql}", extra={'jql': jql, 'fields': fields}, feature='advanced_metrics')
         try:
             with spinner("📊 Running Advanced Metrics..."):
                 issues = jira.search_issues(jql, fields=fields, max_results=200, context=context)
+            contextual_log('info', f"[advanced_metrics] Issues fetched: {len(issues) if issues else 0}", extra={'jql': jql, 'fields': fields, 'issue_sample': issues[:2] if issues else []}, feature='advanced_metrics')
         except Exception as e:
             contextual_log('error', f"📊 [Advanced Metrics] Failed to fetch issues: {e}", exc_info=True, operation="api_call", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
             error(FAILED_TO.format(action='fetch issues', error=e), extra=context, feature='advanced_metrics')
@@ -122,10 +153,13 @@ def advanced_metrics(
         try:
             user_obj = jira.get_user(account_id=user)
             display_name = user_obj.get('displayName', user)
-        except Exception:
+            contextual_log('info', f"[advanced_metrics] Display name resolved: {display_name}", extra={'user_obj': user_obj}, feature='advanced_metrics')
+        except Exception as e:
+            contextual_log('warning', f"[advanced_metrics] Could not resolve display name: {e}", extra={'user': user}, feature='advanced_metrics')
             pass
         # Aggregate stats
         stats = aggregate_issue_stats(issues)
+        contextual_log('info', f"[advanced_metrics] Stats aggregated", extra={'stats': stats}, feature='advanced_metrics')
         # Header
         header = f"# 📊 Advanced Metrics Report\n**User:** {display_name}  **Timeframe:** {start_date} to {end_date}  **Total issues:** {len(issues)}\n\n---\n"
         # Summary
@@ -160,8 +194,17 @@ def advanced_metrics(
             'top_n': top_reporters,
             'grouped_sections': grouped_sections,
         }
-        filename = make_output_filename(output_dir, f"advanced_metrics_{user_email}_{start_date}_{end_date}_{unique_suffix}")
+        filename = make_output_filename(
+            output_dir,
+            [
+                ("user", user_email),
+                ("start", start_date),
+                ("end", end_date),
+                ("suffix", unique_suffix)
+            ]
+        )
         content = build_report_sections(sections)
+        contextual_log('info', f"[advanced_metrics] Report content built, writing to file: {filename}", extra={'output_filename': filename}, feature='advanced_metrics')
         write_report(filename, content)
         info(f"🦖 Advanced metrics report written to {filename}")
         # Enhanced feature end log
