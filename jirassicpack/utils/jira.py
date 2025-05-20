@@ -10,11 +10,58 @@ from rich.table import Table
 from rich.console import Console
 from jirassicpack.utils.rich_prompt import panel_objects_in_mirror, panel_clever_girl, panel_hold_onto_your_butts
 from questionary import Choice
+import json
+import os
+import time
+
+CACHE_PATH = os.path.join('output', '.jira_user_cache.json')
+CACHE_TTL = 24 * 3600  # 24 hours
 
 # Module-level cache for Jira users
 _CACHED_JIRA_USERS = None
 
-def select_jira_user(jira, allow_multiple=False, default_user=None):
+def load_user_cache():
+    if os.path.exists(CACHE_PATH):
+        try:
+            with open(CACHE_PATH, 'r') as f:
+                data = json.load(f)
+            if time.time() - data.get('timestamp', 0) < CACHE_TTL:
+                return data.get('users', [])
+        except Exception as e:
+            info(f"[user cache] Failed to load cache: {e}")
+    return None
+
+def save_user_cache(users):
+    os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+    with open(CACHE_PATH, 'w') as f:
+        json.dump({'timestamp': time.time(), 'users': users}, f)
+
+def refresh_user_cache(jira):
+    all_jira_users = []
+    start_at = 0
+    max_results = 1000
+    while True:
+        batch = jira.search_users("", start_at=start_at, max_results=max_results)
+        if not batch:
+            break
+        all_jira_users.extend(batch)
+        if len(batch) < max_results:
+            break
+        start_at += max_results
+    save_user_cache(all_jira_users)
+    global _CACHED_JIRA_USERS
+    _CACHED_JIRA_USERS = all_jira_users
+    info("[user cache] Refreshed user cache from Jira.")
+    return all_jira_users
+
+def clear_all_caches():
+    if os.path.exists(CACHE_PATH):
+        os.remove(CACHE_PATH)
+        info("[user cache] Cleared user cache.")
+    global _CACHED_JIRA_USERS
+    _CACHED_JIRA_USERS = None
+
+def select_jira_user(jira, allow_multiple=False, default_user=None, force_refresh=False):
     """
     Reusable helper for selecting a Jira user via submenu:
     - In single-user mode (allow_multiple=False): select one user and return immediately.
@@ -22,21 +69,15 @@ def select_jira_user(jira, allow_multiple=False, default_user=None):
     Returns a single (label, user_obj) tuple or list of such tuples if allow_multiple=True.
     """
     global _CACHED_JIRA_USERS
-    if _CACHED_JIRA_USERS is None:
-        all_jira_users = []
-        start_at = 0
-        max_results = 1000
-        while True:
-            batch = jira.search_users("", start_at=start_at, max_results=max_results)
-            if not batch:
-                break
-            all_jira_users.extend(batch)
-            if len(batch) < max_results:
-                break
-            start_at += max_results
-        _CACHED_JIRA_USERS = all_jira_users
+    if force_refresh:
+        all_jira_users = refresh_user_cache(jira)
     else:
-        all_jira_users = _CACHED_JIRA_USERS
+        all_jira_users = _CACHED_JIRA_USERS or load_user_cache()
+        if all_jira_users is None:
+            all_jira_users = refresh_user_cache(jira)
+        else:
+            info("[user cache] Using cached Jira users.")
+        _CACHED_JIRA_USERS = all_jira_users
     filtered_users = [u for u in all_jira_users if u.get('emailAddress')]
     user_map = {u['accountId']: u for u in filtered_users if 'accountId' in u}
     user_choices = [

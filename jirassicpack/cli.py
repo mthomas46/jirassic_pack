@@ -70,6 +70,11 @@ if not os.path.exists(LOG_FILE):
 handler = RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=5)
 
 class JirassicJsonFormatter(jsonlogger.JsonFormatter):
+    """
+    Custom JSON formatter for structured CLI logging.
+    Adds standard and contextual fields (feature, user, batch, etc.),
+    ensures sensitive data is redacted, and supports log rotation.
+    """
     def add_fields(self, log_record, record, message_dict):
         super().add_fields(log_record, record, message_dict)
         # Standard fields
@@ -190,6 +195,8 @@ FEATURE_COLORS = {
 }
 
 # Dynamically generate FEATURE_REGISTRY and FEATURE_GROUPS from FEATURE_MANIFEST
+# FEATURE_REGISTRY: Maps feature keys to their main module/function for dispatch.
+# FEATURE_GROUPS: Organizes features by group for menu display.
 FEATURE_REGISTRY = {f['key']: f['module'] for f in FEATURE_MANIFEST}
 FEATURE_GROUPS = {}
 for f in FEATURE_MANIFEST:
@@ -199,6 +206,11 @@ for f in FEATURE_MANIFEST:
     FEATURE_GROUPS[group].append((f["emoji"] + " " + f["label"], f["key"]))
 
 def register_features():
+    """
+    Dynamically (re)registers all features in the CLI.
+    Imports feature modules and updates FEATURE_REGISTRY for dispatch.
+    Call this if you add new features at runtime or for hot-reload scenarios.
+    """
     global FEATURE_REGISTRY
     from jirassicpack.features import (
         create_issue, update_issue, bulk_operations, user_team_analytics,
@@ -235,6 +247,11 @@ CLI_LOG_LEVEL = LOG_LEVEL
 
 # --- State Persistence Helpers ---
 def load_cli_state():
+    """
+    Loads persistent CLI state from disk (recent features, favorites, theme, etc).
+    Handles errors gracefully and auto-recovers from malformed or missing state files.
+    Updates global state variables for menu and UX continuity.
+    """
     global RECENT_FEATURES, LAST_FEATURE, LAST_REPORT_PATH, FAVORITE_FEATURES, CLI_THEME, CLI_LOG_LEVEL
     try:
         with open(STATE_FILE, "r") as f:
@@ -284,6 +301,10 @@ def load_cli_state():
             )
 
 def make_json_safe(obj):
+    """
+    Recursively converts an object to a JSON-serializable form.
+    Strips out functions and non-serializable types, used for safe state persistence.
+    """
     if isinstance(obj, (str, int, float, bool)) or obj is None:
         return obj
     if isinstance(obj, dict):
@@ -294,6 +315,11 @@ def make_json_safe(obj):
     return str(obj)
 
 def save_cli_state():
+    """
+    Saves the current CLI state to disk as JSON.
+    Uses make_json_safe to ensure all objects are serializable.
+    Logs errors but does not crash the CLI on failure.
+    """
     try:
         state = make_json_safe({
             "recent_features": RECENT_FEATURES,
@@ -310,6 +336,11 @@ def save_cli_state():
 
 # --- Onboarding: Step-by-step wizard for first run ---
 def onboarding_wizard():
+    """
+    Interactive onboarding wizard for first-time users.
+    Guides the user through theme selection, log level, a quick tour, and optional docs.
+    Can be rerun from the Settings menu at any time.
+    """
     rich_panel("""
 🦖 Welcome to Jirassic Pack CLI!
 
@@ -347,6 +378,12 @@ Main CLI Features:
 
 # --- Enhanced Main Menu (onboarding wizard, batch mode with per-feature options) ---
 def feature_menu():
+    """
+    Main menu loop for the CLI.
+    Lets users select feature groups, run batch mode, access favorites, recently used, help, settings, onboarding, or exit.
+    Handles dynamic feature discovery, batch planning, and contextual help.
+    Yields (feature, group) tuples for the main loop to dispatch.
+    """
     from jirassicpack.features import FEATURE_MANIFEST
     global RECENT_FEATURES, LAST_FEATURE, LAST_REPORT_PATH, FAVORITE_FEATURES, CLI_THEME, CLI_LOG_LEVEL
     group_names = ["Batch mode: Run multiple features", "Favorites", "Recently Used"] + list(FEATURE_GROUPS.keys()) + ["Help", "Settings", "Onboarding Wizard", "Exit"]
@@ -566,6 +603,12 @@ if first_run:
 
 # --- Main loop: persistently return to main menu ---
 def main() -> None:
+    """
+    Main entrypoint for the CLI application.
+    Handles startup, config loading, onboarding, and persistent menu loop.
+    Connects to Jira, registers features, and dispatches user-selected features or batch runs.
+    Handles graceful shutdown, error reporting, and LLM server orchestration.
+    """
     try:
         logger.info('[DIAGNOSTIC] Logging is working at CLI startup.')
         # Show a single combined welcome panel
@@ -638,6 +681,18 @@ def main() -> None:
             error(f"[EXIT] Failed to stop local LLM server: {e}")
 
 def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str = None, batch_index: int = None, unique_suffix: str = None) -> None:
+    """
+    Dispatches and runs a single feature by key.
+    Handles mapping menu labels to feature keys, context logging, and special-case inline handlers.
+    Supports batch mode, user prompts, and robust error handling for all feature types.
+    Parameters:
+        feature: Feature key or menu label
+        jira: JiraClient instance
+        options: Feature options/config
+        user_email: Email of the user running the feature
+        batch_index: Batch run index (if in batch mode)
+        unique_suffix: Suffix for output files (if in batch mode)
+    """
     update_llm_menu()
     context = {"feature": feature, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
     contextual_log('info', f"🦖 [CLI] run_feature: key={repr(feature)}", extra=context)
@@ -947,6 +1002,14 @@ def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -
             error(FAILED_TO.format(action='fetch users', error=e), extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
 
 def output_all_user_property_keys(jira: JiraClient, options: dict, unique_suffix: str = "") -> None:
+    """
+    Fetches and writes all property keys for a selected Jira user to a Markdown file.
+    Prompts the user to select a user, fetches property keys, and writes them to disk.
+    Args:
+        jira (JiraClient): Authenticated Jira client.
+        options (dict): CLI options, including output_dir.
+        unique_suffix (str, optional): Suffix for output filename.
+    """
     context = {"feature": "output_all_user_property_keys", "user": None, "batch": None, "suffix": unique_suffix}
     output_dir = options.get('output_dir', 'output')
     ensure_output_dir(output_dir)
@@ -976,9 +1039,19 @@ def output_all_user_property_keys(jira: JiraClient, options: dict, unique_suffix
             contextual_log('error', f"🦖 [CLI] [output_all_user_property_keys] Exception: {e}", exc_info=True, extra=context)
 
 def pretty_print_result(result):
+    """
+    Pretty-prints a result object as formatted JSON in a rich panel.
+    Args:
+        result (Any): The object to print.
+    """
     rich_panel(json.dumps(result, indent=2), style="info")
 
 def halt_cli(reason=None):
+    """
+    Halts the CLI application, printing a message and logging the reason.
+    Args:
+        reason (str, optional): Reason for halting.
+    """
     msg = f"🦖 CLI halted. {reason}" if reason else "🦖 CLI halted."
     rich_error(msg)
     contextual_log('warning', msg, extra={"feature": "cli"})
@@ -986,6 +1059,13 @@ def halt_cli(reason=None):
 
 # Helper to check if a process is running (basic check)
 def is_process_running(process_name):
+    """
+    Checks if a process with the given name is running on the system.
+    Args:
+        process_name (str): Name or substring of the process to check.
+    Returns:
+        bool: True if running, False otherwise.
+    """
     try:
         import psutil
     except ImportError:
@@ -1000,6 +1080,11 @@ def is_process_running(process_name):
     return False
 
 def get_llm_status():
+    """
+    Returns a status indicator (emoji) for the local LLM server and API processes.
+    Returns:
+        str: Emoji status (🟢 or 🔴)
+    """
     try:
         import psutil  # Only import if needed
     except ImportError:
@@ -1012,6 +1097,9 @@ def get_llm_status():
 
 # Update menu with status indicator
 def update_llm_menu():
+    """
+    Updates the Local LLM Tools menu group with current status and options.
+    """
     status = get_llm_status()
     FEATURE_GROUPS["Local LLM Tools"] = [
         (f"🦖 Start Local LLM Server {status}", "start_local_llm_server"),
@@ -1028,6 +1116,10 @@ def update_llm_menu():
 update_llm_menu()
 
 def start_local_llm_server():
+    """
+    Starts the local LLM server (ollama and http_api.py) if not already running.
+    Checks for binaries, launches processes, and performs health checks.
+    """
     info("🦖 Starting local LLM server...")
     # Check if the server is already running
     try:
@@ -1106,6 +1198,10 @@ def start_local_llm_server():
     info("🦖 Local LLM server startup attempted. Use 'Test Local LLM' to verify health.")
 
 def stop_local_llm_server():
+    """
+    Stops the local LLM server processes (ollama, http_api.py) and ensures shutdown.
+    Attempts to terminate by process name and by port.
+    """
     info("🛑 Stopping local LLM server...")
     # Try health check, but proceed regardless of result
     try:
@@ -1167,6 +1263,9 @@ def stop_local_llm_server():
         info("[WARN] Local LLM server may still be running or is stuck.")
 
 def view_local_llm_logs():
+    """
+    Prints the last 20 lines of ollama.log and http_api.log for local LLM diagnostics.
+    """
     import os
     ollama_log = os.path.expanduser("~/.ollama/ollama.log")
     ollama_dir = os.path.abspath(os.path.join(os.getcwd(), "../Ollama7BPoc"))
@@ -1187,6 +1286,12 @@ def view_local_llm_logs():
         print("No http_api.log found.")
 
 def live_tail_file(filepath, label):
+    """
+    Live-tails a log file, printing new lines as they appear. Handles log rotation and errors.
+    Args:
+        filepath (str): Path to the log file.
+        label (str): Human-readable label for the log.
+    """
     import os
     import time
     rich_panel(f"--- {label} (live tail, Ctrl+C to exit) ---", style="info")
@@ -1232,6 +1337,10 @@ def live_tail_file(filepath, label):
         rich_error(f"[ERROR] Fatal error in tailing {label}: {e}")
 
 def live_tail_local_llm_logs():
+    """
+    Starts two threads to live-tail both ollama.log and http_api.log simultaneously.
+    Handles Ctrl+C and thread errors gracefully.
+    """
     import os
     ollama_log = os.path.expanduser("~/.ollama/ollama.log")
     ollama_dir = os.path.abspath(os.path.join(os.getcwd(), "../Ollama7BPoc"))
@@ -1261,6 +1370,9 @@ def live_tail_local_llm_logs():
         print(f"[ERROR] Fatal error in live tailing logs: {e}")
 
 def view_ollama_server_log():
+    """
+    Prints the last 40 lines of the Ollama server log for diagnostics.
+    """
     log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
     print("--- ollama_server.log (last 40 lines) ---")
     try:
@@ -1273,6 +1385,10 @@ def view_ollama_server_log():
         print(f"[ERROR] Could not read ollama_server.log: {e}")
 
 def live_tail_ollama_server_log():
+    """
+    Live-tails the Ollama server log, printing new lines as they appear.
+    Handles Ctrl+C and file errors.
+    """
     import time
     log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
     print("--- Live tailing ollama_server.log (Ctrl+C to stop) ---")
@@ -1293,6 +1409,9 @@ def live_tail_ollama_server_log():
         print(f"[ERROR] Could not tail ollama_server.log: {e}")
 
 def search_ollama_server_log():
+    """
+    Prompts the user for a search string and prints all matching lines from the Ollama server log.
+    """
     log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
     query = prompt_text("Enter search string for ollama_server.log:")
     print(f"--- Search results for '{query}' in ollama_server.log ---")
@@ -1309,6 +1428,9 @@ def search_ollama_server_log():
         print(f"[ERROR] Could not search ollama_server.log: {e}")
 
 def filter_ollama_server_log():
+    """
+    Prompts the user for a log level and prints all matching lines from the Ollama server log.
+    """
     log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
     level = prompt_text("Enter log level to filter by (e.g., INFO, ERROR, WARNING):")
     print(f"--- ollama_server.log filtered by level '{level.upper()}' ---")
@@ -1325,6 +1447,10 @@ def filter_ollama_server_log():
         print(f"[ERROR] Could not filter ollama_server.log: {e}")
 
 def analyze_logs_and_generate_report():
+    """
+    Analyzes multiple log files and generates a Markdown report summarizing errors, warnings, and info entries.
+    Writes a summary table and top issues for each log.
+    """
     import os
     import datetime
     log_files = [
@@ -1408,13 +1534,19 @@ def test_github_connect(config: dict = None) -> None:
     except Exception as e:
         rich_error(f"❌ Exception during GitHub connect test: {e}")
 
+# --- Autoreload logic for development ---
 if __name__ == "__main__":
+    # If JIRASSICPACK_AUTORELOAD=1, enable watchdog-based autoreload for development
     if os.environ.get("JIRASSICPACK_AUTORELOAD") == "1":
         from watchdog.observers import Observer
         from watchdog.events import FileSystemEventHandler
         import threading
 
         class ReloadHandler(FileSystemEventHandler):
+            """
+            Watches for file changes in the CLI directory and triggers a restart on any .py file change.
+            Used for hot-reloading during development.
+            """
             def __init__(self, restart):
                 self.restart = restart
             def on_any_event(self, event):
@@ -1423,6 +1555,9 @@ if __name__ == "__main__":
                     self.restart()
 
         def restart():
+            """
+            Stops the observer and restarts the CLI process.
+            """
             observer.stop()
             print("🔄 Code change detected, restarting CLI...")
             os.execv(sys.executable, [sys.executable] + sys.argv)
