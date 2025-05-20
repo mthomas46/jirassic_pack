@@ -35,8 +35,6 @@ def log_entry_exit(func):
         # Recursion depth counter (thread-local, per function)
         depth = getattr(wrapper, '_depth', 0)
         wrapper._depth = depth + 1
-        logging.debug(f"[ENTRY] {func.__name__} (depth={wrapper._depth}) args={args}, kwargs={kwargs}")
-        logging.debug(f"[STACK] {func.__name__} call stack:\n{''.join(traceback.format_stack(limit=10))}")
         try:
             result = func(*args, **kwargs)
         except Exception as e:
@@ -44,13 +42,12 @@ def log_entry_exit(func):
             wrapper._depth = depth  # Reset depth on exception
             raise
         wrapper._depth = depth  # Decrement depth after return
-        logging.debug(f"[EXIT] {func.__name__} (depth={wrapper._depth})")
         return result
     wrapper._depth = 0
     return wrapper
 
 # Ensure debug-level logging is enabled
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.WARNING)  # <-- REMOVE THIS LINE
 
 # Apply the decorator to all functions in this file as an example
 # (You can copy this decorator to other modules and apply as needed)
