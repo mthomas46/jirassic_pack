@@ -10,15 +10,17 @@ Outputs a Markdown and JSON report with the updated field and value for record-k
 # This feature allows users to update a field on an existing Jira issue by prompting for the issue key, field, and new value.
 # It writes the updated field and value to a Markdown file for record-keeping.
 
-from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, info, feature_error_handler, spinner, info_spared_no_expense
+from jirassicpack.utils.output_utils import ensure_output_dir, celebrate_success, write_report
+from jirassicpack.utils.message_utils import retry_or_skip, info, error
+from jirassicpack.utils.validation_utils import prompt_with_schema
+from jirassicpack.utils.decorators import feature_error_handler
+from jirassicpack.utils.progress_utils import spinner
 from jirassicpack.utils.logging import contextual_log, redact_sensitive
-from jirassicpack.utils.io import error, write_report
 from jirassicpack.utils.logging import build_context
 from typing import Any
 import time
 from marshmallow import fields
 from jirassicpack.utils.fields import IssueKeyField, BaseOptionsSchema, validate_nonempty
-from jirassicpack.utils.io import prompt_with_schema
 from jirassicpack.analytics.helpers import build_report_sections
 from jirassicpack.constants import FAILED_TO
 

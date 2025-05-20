@@ -4,7 +4,10 @@ summary.py
 Generates summary reports for Jira tickets, including grouping, top assignees, and action items. Provides interactive prompts for user/date selection and outputs professional Markdown reports. Used for analytics and reporting features in Jirassic Pack CLI.
 """
 import os
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_date, safe_get, require_param, render_markdown_report, make_output_filename, status_emoji, write_report, log_entry_exit
+from jirassicpack.utils.output_utils import ensure_output_dir, render_markdown_report_template, make_output_filename, status_emoji, write_report
+from jirassicpack.utils.message_utils import error, info
+from jirassicpack.utils.validation_utils import get_option, safe_get, require_param
+from jirassicpack.utils.progress_utils import spinner
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user
 from datetime import datetime
@@ -20,6 +23,9 @@ import re
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
+from jirassicpack.utils.fields import validate_date
+from jirassicpack.utils.decorators import log_entry_exit
+from jirassicpack.utils.llm_utils import build_llm_manager_prompt, chunk_tickets, call_llm_for_chunks, parse_llm_chunk_results, llm_group_tickets
 
 class SummarizeTicketsOptionsSchema(Schema):
     user = fields.Str(required=True)
@@ -66,10 +72,19 @@ def prompt_summarize_tickets_options(options: dict, jira: Any = None) -> dict:
         ac_field = options.get('acceptance_criteria_field') or os.environ.get('JIRA_ACCEPTANCE_CRITERIA_FIELD', 'customfield_10001')
         schema = SummarizeTicketsOptionsSchema()
         try:
+            # Always pass ISO strings to Marshmallow
+            if hasattr(start_date, 'isoformat'):
+                start_date_str = start_date.isoformat()
+            else:
+                start_date_str = str(start_date)
+            if hasattr(end_date, 'isoformat'):
+                end_date_str = end_date.isoformat()
+            else:
+                end_date_str = str(end_date)
             validated = schema.load({
                 'user': username,
-                'start_date': start_date,
-                'end_date': end_date,
+                'start_date': start_date_str,
+                'end_date': end_date_str,
             })
             break
         except ValidationError as err:
@@ -112,115 +127,6 @@ def extract_largest_json_object(s):
 # Global executor for reuse
 GLOBAL_EXECUTOR = ThreadPoolExecutor(max_workers=min(16, (os.cpu_count() or 8)))
 
-def build_llm_manager_prompt(params, example_categories, prompt_examples):
-    """Build the LLM prompt for manager-focused ticket categorization."""
-    preferred_categories = params.get('preferred_categories') if params else None
-    manager_prompt = (
-        "You are an expert Jira ticket analyst. Your goal is to help a manager quickly understand the main types of work being done.\n"
-        "Given the following list of tickets (with key, summary, and description), group them into a small number (ideally 5-10) of broad, manager-friendly categories. Each category should be:\n"
-        "- Actionable and meaningful to a manager (e.g., " + ', '.join(f'\"{cat}\"' for cat in example_categories) + ").\n"
-        "- Based on the type of work being done (e.g., running scripts, exporting data, updating configurations, resolving user issues) or who the work is being done for (e.g., a specific client or department).\n"
-        "- Avoid generic categories like 'Other' or 'Miscellaneous' unless absolutely necessary, and never use them for more than 10% of tickets.\n"
-        "- If a ticket could fit in more than one category, choose the one that would be most useful for a manager's report.\n"
-    )
-    if preferred_categories:
-        manager_prompt += ("- Where possible, use one of these preferred categories: " + ', '.join(f'\"{cat}\"' for cat in preferred_categories) + ".\n")
-    manager_prompt += "Return a JSON object mapping each ticket key to its category. Do not include any extra text, comments, or explanations—just output the JSON object. STRICT: Output ONLY valid JSON, no prose, no comments, no markdown.\n"
-    manager_prompt += prompt_examples
-    return manager_prompt
-
-
-def chunk_tickets(tickets, chunk_size):
-    """Yield successive chunks from the tickets list."""
-    for i in range(0, len(tickets), chunk_size):
-        yield tickets[i:i+chunk_size]
-
-
-def call_llm_for_chunks(chunk_prompts, use_async, llm_utils, response_format, executor):
-    """Call the LLM for each chunk, using async or threaded execution."""
-    chunk_results = []
-    if use_async:
-        async def process_all_chunks_async(chunk_prompts):
-            import asyncio
-            tasks = [
-                llm_utils.call_openai_llm_async(llm_prompt, response_format=response_format)
-                for _, llm_prompt in chunk_prompts
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return [(chunk_keys, result) for (chunk_keys, _), result in zip(chunk_prompts, results)]
-        loop = asyncio.get_event_loop()
-        chunk_results = loop.run_until_complete(process_all_chunks_async(chunk_prompts))
-    else:
-        from concurrent.futures import as_completed
-        chunk_futures = [executor.submit(llm_utils.call_openai_llm, llm_prompt, response_format=response_format) for chunk_keys, llm_prompt in chunk_prompts]
-        for (chunk_keys, _), future in zip(chunk_prompts, as_completed(chunk_futures)):
-            try:
-                llm_response = future.result()
-                chunk_results.append((chunk_keys, llm_response))
-            except Exception as e:
-                chunk_results.append((chunk_keys, None))
-    return chunk_results
-
-
-def parse_llm_chunk_results(chunk_results, chunk_prompts, superbatch, logger):
-    """Parse LLM responses for each chunk, log/print diagnostics, and collect results."""
-    results = {}
-    failed_chunks = []
-    chunk_prompt_map = {tuple(keys): prompt for keys, prompt in chunk_prompts}
-    for chunk_keys, llm_response in chunk_results:
-        llm_prompt = chunk_prompt_map.get(tuple(chunk_keys), "<prompt not found>")
-        logger('info', f"[summarize_tickets] Sending LLM prompt for chunk {chunk_keys}: {llm_prompt[:500]}")
-        print(f"[summarize_tickets] Sending LLM prompt for chunk {chunk_keys}: {llm_prompt[:500]}")
-        logger('info', f"[summarize_tickets] Raw LLM response for chunk {chunk_keys}: {repr(llm_response)[:1000]}")
-        print(f"[summarize_tickets] Raw LLM response for chunk {chunk_keys}: {repr(llm_response)[:1000]}")
-        if not llm_response or not isinstance(llm_response, str):
-            logger('error', f"[summarize_tickets] LLM response is empty or not a string for chunk {chunk_keys}: {repr(llm_response)}")
-            failed_chunks.append([tc for tc in superbatch if tc['key'] in chunk_keys])
-            continue
-        try:
-            chunk_result = json.loads(llm_response)
-            results.update({k.strip().upper(): v for k, v in chunk_result.items()})
-        except Exception:
-            failed_chunks.append([tc for tc in superbatch if tc['key'] in chunk_keys])
-    return results, failed_chunks
-
-
-def llm_group_tickets(ticket_contexts, params, use_async, chunk_sizes, manager_prompt, executor, logger):
-    """Main LLM grouping logic: chunk tickets, call LLM, parse results, retry failed chunks with smaller sizes."""
-    import jirassicpack.utils.llm as llm_utils
-    response_format = {"type": "json_object"}
-    superbatch = ticket_contexts
-    results = {}
-    for chunk_size in chunk_sizes:
-        chunk_prompts = []
-        for chunk in chunk_tickets(superbatch, chunk_size):
-            chunk_keys = [t['key'] for t in chunk]
-            llm_prompt = manager_prompt + f"Tickets: {json.dumps(chunk)}"
-            chunk_prompts.append((chunk_keys, llm_prompt))
-        chunk_results = call_llm_for_chunks(chunk_prompts, use_async, llm_utils, response_format, executor)
-        for (chunk_keys, llm_response) in chunk_results:
-            print(f"[summarize_tickets][DIAG] Processed chunk keys: {chunk_keys}")
-            print(f"[summarize_tickets][DIAG] Chunk result: {llm_response}")
-            logger('info', f"[summarize_tickets][DIAG] Processed chunk keys: {chunk_keys}")
-            logger('info', f"[summarize_tickets][DIAG] Chunk result: {llm_response}")
-        chunk_results_parsed, failed_chunks = parse_llm_chunk_results(chunk_results, chunk_prompts, superbatch, logger)
-        # Merging logic: accumulate all mappings
-        results.update(chunk_results_parsed)
-        if not failed_chunks:
-            break
-        else:
-            superbatch = [tc for chunk in failed_chunks for tc in chunk]
-    # Any still-failed tickets get Uncategorized, but only if not already present
-    for tc in superbatch:
-        key = tc['key'].strip().upper()
-        if key not in results:
-            results[key] = "Uncategorized"
-            print(f"[llm_group_tickets][PATCH] Fallback: assigning {key} to 'Uncategorized'")
-            logger('warning', f"[llm_group_tickets][PATCH] Fallback: assigning {key} to 'Uncategorized'")
-    print(f"[summarize_tickets][DIAG] Final merged results: {list(results.items())[:10]}")
-    logger('info', f"[summarize_tickets][DIAG] Final merged results: {list(results.items())[:10]}")
-    return results
-
 def summarize_tickets(
     jira: Any,
     params: dict,
@@ -243,11 +149,11 @@ def summarize_tickets(
     context = build_context("summarize_tickets", user_email, batch_index, unique_suffix)
     try:
         contextual_log('info', f"📝 [Summarize Tickets] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='summarize_tickets')
-        if not require_param(params, 'user', context):
+        if not require_param(params.get('user'), 'user'):
             return
-        if not require_param(params, 'start_date', context):
+        if not require_param(params.get('start_date'), 'start_date'):
             return
-        if not require_param(params, 'end_date', context):
+        if not require_param(params.get('end_date'), 'end_date'):
             return
         username = params.get('user')
         display_name = params.get('user_display_name')

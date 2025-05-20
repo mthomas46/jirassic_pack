@@ -10,9 +10,12 @@ Outputs a Markdown and JSON report with the created issue's details for record-k
 # This feature allows users to create a new Jira issue by prompting for project, summary, description, and issue type.
 # It writes the created issue's key and summary to a Markdown file for record-keeping.
 
-from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, info, make_output_filename, feature_error_handler, write_output_file, prompt_with_schema
+from jirassicpack.utils.output_utils import ensure_output_dir, celebrate_success, make_output_filename, write_report
+from jirassicpack.utils.message_utils import retry_or_skip, info, error
+from jirassicpack.utils.validation_utils import prompt_with_schema
+from jirassicpack.utils.decorators import feature_error_handler
+from jirassicpack.utils.progress_utils import spinner
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
-from jirassicpack.utils.io import error
 from typing import Any
 import json
 import time

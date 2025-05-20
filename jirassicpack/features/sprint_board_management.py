@@ -6,7 +6,11 @@ Prompts for board and sprint name, fetches board/sprint/issue data, and outputs 
 """
 
 from typing import Any, Dict
-from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, info, feature_error_handler, prompt_with_schema, write_report, error
+from jirassicpack.utils.output_utils import ensure_output_dir, celebrate_success, write_report
+from jirassicpack.utils.message_utils import retry_or_skip, info, error
+from jirassicpack.utils.validation_utils import prompt_with_schema
+from jirassicpack.utils.decorators import feature_error_handler
+from jirassicpack.utils.progress_utils import spinner
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 import time
 from marshmallow import fields
@@ -164,7 +168,6 @@ def sprint_board_management(
             contextual_log('error', f"[sprint_board_management] Failed to write sprint board file: {e}", exc_info=True, extra=context, feature='sprint_board_management')
             return
         celebrate_success()
-        info_spared_no_expense()
         info(f"🌋 Sprint/Board summary written to {filename}", extra=context, feature='sprint_board_management')
         duration = int((time.time() - start_time) * 1000)
         contextual_log('info', f"🏁 [Sprint/Board Management] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}).", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='sprint_board_management')

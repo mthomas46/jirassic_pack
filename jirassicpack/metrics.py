@@ -4,13 +4,17 @@ metrics.py
 Gathers and reports metrics for Jira issues, including grouping by type and summary statistics. Provides interactive prompts for user/date selection and outputs professional Markdown reports. Used for analytics and reporting features in Jirassic Pack CLI.
 """
 import os
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_date, safe_get, require_param, make_output_filename, write_report
+from jirassicpack.utils.output_utils import ensure_output_dir, make_output_filename, write_report
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user
 from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
 from typing import Any
 from jirassicpack.analytics.helpers import build_report_sections, group_issues_by_field, aggregate_issue_stats, make_summary_section, make_breakdown_section
+from jirassicpack.utils.message_utils import error, info
+from jirassicpack.utils.validation_utils import get_option, safe_get, require_param
+from jirassicpack.utils.progress_utils import spinner
+from jirassicpack.utils.fields import validate_date
 
 class GatherMetricsOptionsSchema(Schema):
     user = fields.Str(required=True)
@@ -92,11 +96,11 @@ def gather_metrics(
     context = build_context("gather_metrics", user_email, batch_index, unique_suffix)
     try:
         contextual_log('info', f"📈 [Gather Metrics] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='gather_metrics')
-        if not require_param(params, 'user', context):
+        if not require_param(params.get('user'), 'user'):
             return
-        if not require_param(params, 'start_date', context):
+        if not require_param(params.get('start_date'), 'start_date'):
             return
-        if not require_param(params, 'end_date', context):
+        if not require_param(params.get('end_date'), 'end_date'):
             return
         username = params.get('user')
         start_date = params.get('start_date')

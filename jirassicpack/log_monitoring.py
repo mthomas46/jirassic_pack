@@ -17,7 +17,8 @@ import os
 from collections import Counter, defaultdict
 from tabulate import tabulate
 from statistics import mean, stdev
-from jirassicpack.utils.io import safe_get, prompt_text, prompt_select
+from jirassicpack.utils.validation_utils import safe_get
+from jirassicpack.utils.prompt_utils import prompt_text, prompt_select
 from jirassicpack.utils.logging import contextual_log
 from jirassicpack.analytics.helpers import build_report_sections
 

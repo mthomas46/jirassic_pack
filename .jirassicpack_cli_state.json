@@ -1,8 +1,8 @@
 {
-  "recent_features": [
-    {
-      "key": "summarize_tickets",
-      "label": "Summarize tickets",
-      "emoji": "\ud83d\uddc2\ufe0f",
-      "group": "Analytics & Reporting",
-      "module": 
+  "RECENT_FEATURES": [],
+  "LAST_FEATURE": null,
+  "LAST_REPORT_PATH": null,
+  "FAVORITE_FEATURES": [],
+  "CLI_THEME": "default",
+  "CLI_LOG_LEVEL": "INFO"
+}

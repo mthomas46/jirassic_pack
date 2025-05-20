@@ -287,7 +287,7 @@ def my_feature(jira, options, user_email=None, batch_index=None, unique_suffix=N
 
 ### Logging
 - Use `contextual_log` for all structured logs, including feature, user, batch, and suffix context.
-- Use the `info()` and `error()` utilities from `jirassicpack.utils.io`, which automatically log to both the console and the structured log.
+- Use the `info()` and `error()` utilities from `jirassicpack.utils.message_utils`, which automatically log to both the console and the structured log.
 - Avoid direct use of `print()` for logging; use the provided logging utilities.
 
 ### Configuration
@@ -307,7 +307,7 @@ All new feature prompt functions should use the shared `prompt_with_schema` util
 
 #### Example
 ```python
-from jirassicpack.utils.io import prompt_with_schema
+from jirassicpack.utils.validation_utils import prompt_with_schema
 from marshmallow import Schema, fields
 
 class MyFeatureOptionsSchema(Schema):

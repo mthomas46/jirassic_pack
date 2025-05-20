@@ -56,14 +56,19 @@ class BaseOptionsSchema(Schema):
                     data[k] = v
         return data 
 
-def validate_date(value: str) -> None:
-    """Validate date string is in YYYY-MM-DD format. Raises ValidationError if invalid."""
+def validate_date(value: str, raise_exception: bool = False) -> bool:
+    """Validate date string is in YYYY-MM-DD format. Returns True/False for CLI, raises ValidationError for Marshmallow."""
     if not isinstance(value, str):
-        raise ValidationError("Date must be a string in YYYY-MM-DD format.", "Example: 2024-01-01")
+        if raise_exception:
+            raise ValidationError("Date must be a string in YYYY-MM-DD format.", "Example: 2024-01-01")
+        return False
     try:
         datetime.datetime.strptime(value, "%Y-%m-%d")
+        return True
     except Exception:
-        raise ValidationError("Date must be in YYYY-MM-DD format.", "Example: 2024-01-01")
+        if raise_exception:
+            raise ValidationError("Date must be in YYYY-MM-DD format.", "Example: 2024-01-01")
+        return False
 
 def validate_nonempty(value: str) -> None:
     """Validate that a string is not empty. Raises ValidationError if empty."""

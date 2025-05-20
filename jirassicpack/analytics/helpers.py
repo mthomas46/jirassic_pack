@@ -235,16 +235,14 @@ def build_report_sections(sections: dict) -> str:
     """
     order = [
         'header',
-        'toc',
-        'summary',
-        'action_items',
-        'top_n',
-        'breakdowns',
-        'related_links',
-        'grouped_sections',
-        'next_steps',
         'metadata',
+        'summary',
+        'top_n',
+        'action_items',
+        'grouped_sections',
+        'related_links',
         'glossary',
+        'next_steps',
     ]
     out = []
     for key in order:

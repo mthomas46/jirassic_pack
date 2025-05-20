@@ -11,7 +11,11 @@ Outputs a Markdown and JSON report with the results for traceability and audit.
 # It prompts the user for the desired action, the JQL to select issues, and the value for the action (if needed).
 # Results are written to a Markdown report for traceability.
 
-from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, spinner, progress_bar, info_spared_no_expense, info, error, prompt_select, feature_error_handler, make_output_filename, prompt_with_schema, write_report
+from jirassicpack.utils.output_utils import ensure_output_dir, celebrate_success, make_output_filename
+from jirassicpack.utils.message_utils import retry_or_skip, info, error
+from jirassicpack.utils.prompt_utils import prompt_select
+from jirassicpack.utils.progress_utils import spinner, progress_bar
+from jirassicpack.utils.decorators import feature_error_handler
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from typing import Any
 import time
@@ -19,6 +23,7 @@ from marshmallow import fields, validate
 from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
 from jirassicpack.analytics.helpers import build_report_sections
 from jirassicpack.constants import SEE_NOBODY_CARES, BULK_OPERATION_CANCELLED
+from jirassicpack.utils.validation_utils import prompt_with_schema
 
 def prompt_bulk_options(opts: dict, jira: Any = None) -> dict:
     """

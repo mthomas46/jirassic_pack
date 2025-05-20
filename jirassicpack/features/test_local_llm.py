@@ -1,6 +1,7 @@
 import os
 from jirassicpack.features.ticket_discussion_summary import call_local_llm_text, call_local_llm_github_pr
-from jirassicpack.utils.io import prompt_text, prompt_select, prompt_password, prompt_path, feature_error_handler
+from jirassicpack.utils.prompt_utils import prompt_text, prompt_select, prompt_password
+from jirassicpack.utils.decorators import feature_error_handler
 import requests
 from jirassicpack.config import ConfigLoader
 
@@ -38,7 +39,7 @@ def test_local_llm(params=None, user_email=None, batch_index=None, unique_suffix
         except Exception as e:
             print(f"🦖 Error calling local LLM: {e}")
     elif method == "Send file":
-        file_path = prompt_path("Enter the path to the file to send:")
+        file_path = prompt_text("Enter the path to the file to send:")
         if not file_path or not os.path.isfile(file_path):
             print("🦖 Invalid file path. Aborting.")
             return

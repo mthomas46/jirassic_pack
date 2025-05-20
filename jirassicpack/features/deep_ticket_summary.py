@@ -5,8 +5,11 @@ Feature module for generating a deep summary report for a single Jira ticket via
 Fetches all available information (description, comments, changelog, fields, etc.) and outputs a detailed Markdown report for audit and review.
 """
 
-from jirassicpack.utils.io import ensure_output_dir, info, spinner, safe_get, get_option, status_emoji, feature_error_handler, write_report
-from jirassicpack.utils.logging import contextual_log, build_context
+from jirassicpack.utils.output_utils import ensure_output_dir, write_report, status_emoji
+from jirassicpack.utils.message_utils import info
+from jirassicpack.utils.validation_utils import get_option, safe_get
+from jirassicpack.utils.decorators import feature_error_handler
+from jirassicpack.utils.progress_utils import spinner
 from jirassicpack.config import ConfigLoader
 from datetime import datetime
 import os

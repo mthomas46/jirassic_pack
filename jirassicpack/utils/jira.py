@@ -4,8 +4,9 @@ jirassicpack.utils.jira
 All Jira API helpers, user/field/transition selectors, and interactive search utilities for the Jirassic Pack CLI. Provides robust, user-friendly selection and validation for all Jira-related CLI operations.
 """
 import questionary
-from jirassicpack.utils.io import info, prompt_text, prompt_select, select_with_pagination_and_fuzzy, select_from_list
-from jirassicpack.utils.io import pretty_print_result
+from jirassicpack.utils.message_utils import info
+from jirassicpack.utils.prompt_utils import prompt_text, prompt_select, select_with_pagination_and_fuzzy, select_from_list
+from jirassicpack.utils.output_utils import pretty_print_result
 from rich.table import Table
 from rich.console import Console
 from jirassicpack.utils.rich_prompt import panel_objects_in_mirror, panel_clever_girl, panel_hold_onto_your_butts

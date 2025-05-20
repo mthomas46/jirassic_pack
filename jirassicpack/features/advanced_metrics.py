@@ -9,14 +9,19 @@ Prompts for user and timeframe, fetches completed issues, and outputs a Markdown
 # This feature calculates advanced metrics for Jira issues, such as cycle time and lead time, for a given user and timeframe.
 # It prompts for user, start/end dates, fetches completed issues, and outputs a Markdown report with a metrics table.
 
-from jirassicpack.utils.io import ensure_output_dir, spinner, info, make_output_filename, feature_error_handler, safe_get, validate_date, error, require_param, prompt_with_schema, write_report
+from jirassicpack.utils.output_utils import ensure_output_dir, make_output_filename, write_report
+from jirassicpack.utils.message_utils import info, error
+from jirassicpack.utils.validation_utils import safe_get, require_param
+from jirassicpack.utils.validation_utils import prompt_with_schema
+from jirassicpack.utils.decorators import feature_error_handler
+from jirassicpack.utils.progress_utils import spinner
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from typing import Any
 from collections import defaultdict
 import logging
 import time
 from marshmallow import fields, pre_load
-from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
+from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty, validate_date
 from jirassicpack.analytics.helpers import aggregate_issue_stats, make_summary_section, make_breakdown_section, make_reporter_section, build_report_sections
 from jirassicpack.constants import SEE_NOBODY_CARES, FAILED_TO
 
@@ -81,11 +86,11 @@ def advanced_metrics(
     try:
         # Enhanced feature entry log
         contextual_log('info', f"📊 [Advanced Metrics] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
-        if not require_param(params, 'user', context):
+        if not require_param(params.get('user'), 'user'):
             return
-        if not require_param(params, 'start_date', context):
+        if not require_param(params.get('start_date'), 'start_date'):
             return
-        if not require_param(params, 'end_date', context):
+        if not require_param(params.get('end_date'), 'end_date'):
             return
         output_dir = params.get('output_dir', 'output')
         unique_suffix = params.get('unique_suffix', '')

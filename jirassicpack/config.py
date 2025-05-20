@@ -3,7 +3,7 @@ import yaml
 from jirassicpack.utils.logging import redact_sensitive, contextual_log
 from marshmallow import fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
-from jirassicpack.utils.io import get_option
+from jirassicpack.utils.validation_utils import get_option
 from jirassicpack.utils.fields import BaseOptionsSchema
 
 """

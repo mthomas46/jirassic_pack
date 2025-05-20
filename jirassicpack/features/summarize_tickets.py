@@ -4,7 +4,11 @@ summarize_tickets.py
 Generates summary reports for Jira tickets, including grouping, top assignees, and action items. Provides interactive prompts for user/date selection and outputs professional Markdown reports. Used for analytics and reporting features in Jirassic Pack CLI.
 """
 import os
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_date, safe_get, require_param, render_markdown_report, make_output_filename, status_emoji, write_report, feature_error_handler, log_entry_exit
+from jirassicpack.utils.output_utils import ensure_output_dir, render_markdown_report_template, make_output_filename, status_emoji, write_report
+from jirassicpack.utils.progress_utils import spinner
+from jirassicpack.utils.message_utils import error, info
+from jirassicpack.utils.validation_utils import get_option, safe_get, require_param
+from jirassicpack.utils.decorators import feature_error_handler, log_entry_exit
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user
 from datetime import datetime
@@ -12,6 +16,11 @@ from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
 from typing import Any
 from jirassicpack.analytics.helpers import build_report_sections, group_issues_by_field, make_top_n_list
+from jirassicpack.utils.fields import validate_date
+from jirassicpack.utils.llm_utils import build_llm_manager_prompt, llm_group_tickets
+from concurrent.futures import ThreadPoolExecutor
+
+GLOBAL_EXECUTOR = ThreadPoolExecutor(max_workers=min(16, (os.cpu_count() or 8)))
 
 def prompt_summarize_tickets_options(options: dict, jira: Any = None) -> dict:
     """
@@ -105,11 +114,11 @@ def summarize_tickets(
     context = build_context("summarize_tickets", user_email, batch_index, unique_suffix)
     try:
         contextual_log('info', f"📝 [Summarize Tickets] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='summarize_tickets')
-        if not require_param(params, 'user', context):
+        if not require_param(params.get('user'), 'user'):
             return
-        if not require_param(params, 'start_date', context):
+        if not require_param(params.get('start_date'), 'start_date'):
             return
-        if not require_param(params, 'end_date', context):
+        if not require_param(params.get('end_date'), 'end_date'):
             return
         username = params.get('user')
         display_name = params.get('user_display_name')
@@ -131,17 +140,22 @@ def summarize_tickets(
         else:
             account_id = username
         # Build JQL for summary
-        jql = (
-            f"assignee = '{username}' "
+        jql_api = (
+            f"assignee = '{account_id}' "
             f"AND resolved >= '{start_date}' "
             f"AND resolved <= '{end_date}'"
         )
-        info(f"[summarize_tickets] Using JQL: {jql}")
-        info(f"[summarize_tickets] Using user accountId: {username}")
+        jql_human = (
+            f"assignee = '{display_name}' "
+            f"AND resolved >= '{start_date}' "
+            f"AND resolved <= '{end_date}'"
+        )
+        info(f"[summarize_tickets] Using JQL (API): {jql_api}")
+        info(f"[summarize_tickets] Using JQL (Human): {jql_human}")
         fields = ["summary", "created", "resolutiondate", "status", "key", "issuetype", "priority", "duedate", "assignee", "changelog"]
         try:
             with spinner("🦖 Summarizing Tickets..."):
-                issues = jira.search_issues(jql, fields=fields, max_results=100)
+                issues = jira.search_issues(jql_api, fields=fields, max_results=100)
             info(f"[summarize_tickets] Fetched {len(issues) if issues else 0} issues for user {username}.")
             contextual_log('debug', f"[summarize_tickets] Type of issues: {type(issues)} | Length: {len(issues) if issues is not None else 'None'}", extra=context, feature='summarize_tickets')
             if issues:
@@ -168,7 +182,7 @@ def summarize_tickets(
                 raise RuntimeError(f"[summarize_tickets][DIAG][IMPOSSIBLE] len(issues) > 0 but not issues is True! issues: {repr(issues)}")
             contextual_log('debug', f"[summarize_tickets] Entered 'no issues found' branch. issues: {issues}", extra=context, feature='summarize_tickets')
             info(f"[summarize_tickets][DIAG] Entered 'no issues found' branch. issues: {str(issues)}")
-            error(f"[summarize_tickets] No issues found. JQL: {jql} | user: {username} | start_date: {start_date} | end_date: {end_date}", extra=context, feature='summarize_tickets')
+            error(f"[summarize_tickets] No issues found. JQL: {jql_human} | user: {username} | start_date: {start_date} | end_date: {end_date}", extra=context, feature='summarize_tickets')
             info("🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='summarize_tickets')
             contextual_log('info', "🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='summarize_tickets')
             # Write an empty report with a message
@@ -176,13 +190,13 @@ def summarize_tickets(
             filename = make_output_filename("summarize_tickets", params_list, output_dir)
             contextual_log('info', f"[summarize_tickets] Attempting to write empty report to {filename}", extra=context, feature='summarize_tickets')
             try:
-                empty_report = render_markdown_report(
+                empty_report = render_markdown_report_template(
                     feature="summarize_tickets",
                     user=user_email,
                     batch=batch_index,
                     suffix=unique_suffix,
                     feature_title="Ticket Summarization",
-                    summary_section=f"**No issues found for the given parameters.**\n\nJQL: {jql}\nUser: {username}\nDate Range: {start_date} to {end_date}"
+                    summary_section=f"**No issues found for the given parameters.**\n\nJQL: {jql_human}\nUser: {username}\nDate Range: {start_date} to {end_date}"
                 )
                 write_report(filename, empty_report, context, filetype='md', feature='summarize_tickets', item_name='Ticket summary report (empty)')
                 info(f"🗂️ Ticket summary written to {filename}", extra=context, feature='summarize_tickets')
@@ -201,62 +215,142 @@ def summarize_tickets(
                     ("Status", ["fields", "status", "name"]),
                     ("Priority", ["fields", "priority", "name"]),
                     ("Project Category", ["fields", "project", "projectCategory", "name"]),
+                    ("LLM Suggested Category", None),
+                    ("⬅️ Back to previous menu", None),
                 ]
                 grouping_choice = questionary.select(
                     "How would you like to group the tickets in the summary report?",
                     choices=[f[0] for f in grouping_fields],
                     default="Issue Type"
                 ).ask()
+                if grouping_choice == "⬅️ Back to previous menu":
+                    info("Aborted ticket summary grouping selection. Returning to previous menu.")
+                    return
                 grouping_label, grouping_path = next(f for f in grouping_fields if f[0] == grouping_choice)
                 info(f"[summarize_tickets] Grouping by: {grouping_label} (path: {grouping_path})")
-                # Group by selected field (now using helper)
-                grouped = group_issues_by_field(issues, grouping_path, f"Other {grouping_label}")
+                if grouping_label == "LLM Suggested Category":
+                    # Use LLM-based grouping logic
+                    # Prepare LLM prompt and ticket contexts
+                    example_categories = [
+                        "Client Onboarding", "Data Migration", "Bug Fixes", "Script Execution", "User Account Management", "Compliance Reporting", "Client: JBS", "Client: NBCUniversal"
+                    ]
+                    prompt_examples = (
+                        "Example input:\n"
+                        "[\n"
+                        "  {\"key\": \"PA-123\", \"summary\": \"Onboard new client JBS\", \"description\": \"...\"},\n"
+                        "  {\"key\": \"PA-124\", \"summary\": \"Run data migration script for NBCUniversal\", \"description\": \"...\"},\n"
+                        "  {\"key\": \"PA-125\", \"summary\": \"Fix bug in user account creation\", \"description\": \"...\"},\n"
+                        "]\n"
+                    )
+                    # Explicitly set preferred_categories
+                    params["preferred_categories"] = example_categories
+                    manager_prompt = build_llm_manager_prompt(params, example_categories, prompt_examples)
+                    # Debug print/log for the prompt
+                    print("\n[LLM DEBUG] Prompt sent to LLM for grouping:\n" + manager_prompt)
+                    contextual_log('debug', f"[LLM DEBUG] Prompt sent to LLM for grouping: {manager_prompt}", feature='summarize_tickets')
+                    ticket_contexts = [
+                        {
+                            "key": issue.get("key", "N/A"),
+                            "summary": safe_get(issue, ["fields", "summary"], ""),
+                            "description": safe_get(issue, ["fields", "description"], "")
+                        }
+                        for issue in issues
+                    ]
+                    chunk_sizes = [20, 15, 10, 5]
+                    use_async = params.get('llm_async', False) if params else False
+                    logger = lambda level, msg: contextual_log(level, msg, feature='summarize_tickets')
+                    ticket_categories = llm_group_tickets(ticket_contexts, params, use_async, chunk_sizes, manager_prompt, GLOBAL_EXECUTOR, logger)
+                    # Build grouped dict from LLM categories
+                    grouped = {}
+                    category_keys = list(ticket_categories.keys())
+                    for issue in issues:
+                        key = str(issue.get("key", "N/A")).strip().upper()
+                        category = ticket_categories.get(key)
+                        used_fuzzy = False
+                        if category is None:
+                            # Fuzzy match: try to find a key in category_keys that matches after normalization
+                            for ck in category_keys:
+                                if str(ck).strip().upper() == key:
+                                    category = ticket_categories[ck]
+                                    used_fuzzy = True
+                                    contextual_log('info', f"[summarize_tickets] Fuzzy match: {key} == {ck}", feature='summarize_tickets')
+                                    print(f"[summarize_tickets] Fuzzy match: {key} == {ck}")
+                                    break
+                        if category is None:
+                            category = "Uncategorized"
+                            contextual_log('warning', f"[summarize_tickets] Key {key} not found in LLM categories. Falling back to 'Uncategorized'.", feature='summarize_tickets')
+                        print(f"[summarize_tickets] Ticket {key} assigned to category: {category}{' (fuzzy)' if used_fuzzy else ''}")
+                        contextual_log('info', f"[summarize_tickets] Ticket {key} assigned to category: {category}{' (fuzzy)' if used_fuzzy else ''}", feature='summarize_tickets')
+                        grouped.setdefault(category, []).append(issue)
+                else:
+                    grouped = group_issues_by_field(issues, grouping_path, f"Other {grouping_label}")
+                # Metadata section with blockquote
+                export_metadata = (
+                    "> [!INFO] **Report Metadata**\n>\n"
+                    f"> - **JQL Used:**  `{jql_human}`\n"
+                    f"> - **Grouping Method:** `{grouping_label}`\n"
+                    f"> - **Jira User/Account:** **{display_name}** ({account_id})\n"
+                    f"> - **Report Generated by:** `{user_email}`\n"
+                    f"> - **Run at:** `{datetime.now().strftime('%Y-%m-%d %H:%M')}`\n"
+                    "---\n"
+                )
                 # Build sections using helpers
-                header = "# 🗂️ Ticket Summary Report\n\n"
-                header += "**Feature:** Summarize Tickets  "
-                header += f"**User:** {display_name} ({account_id})  "
-                header += f"**Timeframe:** {start_date} to {end_date}  "
-                header += f"**Total issues completed:** {total_issues}  "
-                header += f"**Grouped by:** {grouping_label}  "
-                header += "\n\n---\n\n"
+                header = (
+                    "# 🦖 **Jirassic Pack: Ticket Summary Report**\n\n"
+                    "---\n\n"
+                    "> **Feature:** _Summarize Tickets_  "
+                    f"> **User:** **{display_name}** ({account_id})  "
+                    f"> **Timeframe:** _{start_date} to {end_date}_  "
+                    f"> **Total Issues Completed:** **{total_issues}**  "
+                    f"> **Grouped by:** _{grouping_label}_\n\n"
+                    "---\n"
+                )
                 toc = "## Table of Contents\n" + "\n".join(f"- [{group_label}](#{str(group_label).lower().replace(' ', '-').replace('/', '-')}-issues)" for group_label in grouped) + "\n"
-                summary_table = f"| {grouping_label} | Count |\n|---|---|\n" + "\n".join(f"| {group_label} | {len(issues_in_group)} |" for group_label, issues_in_group in grouped.items()) + "\n---\n\n"
-                # Action items
+                # Enhanced summary table section
+                raw_summary_table = "| {grouping_label} | Count |\n|---|---|\n" + "\n".join(f"| {group_label} | {len(issues_in_group)} |" for group_label, issues_in_group in grouped.items()) + "\n---\n\n"
+                summary_table = f"## 📋 **Summary Table**\n\n{raw_summary_table}\n---\n"
+                # Action items with blockquote for warnings
+                raw_action_items = ""
                 not_resolved = [issue for issues_in_group in grouped.values() for issue in issues_in_group if safe_get(issue, ['fields', 'status', 'name'], '').lower() not in ['done', 'closed', 'resolved']]
-                action_items = "## Action Items\n"
                 if not_resolved:
-                    action_items += "### Not Resolved\n"
+                    raw_action_items = "> [!WARNING] **Not Resolved:**\n>\n"
                     for issue in not_resolved:
                         key = issue.get('key', '')
                         summary = safe_get(issue, ['fields', 'summary'], '')[:40]
                         status = safe_get(issue, ['fields', 'status', 'name'], '')
-                        action_items += f"- ⏳ [{key}] {summary} (Status: {status})\n"
+                        raw_action_items += f"> - ⏳ **[{key}]** _{summary}_ (**Status:** `{status}`)\n"
                 else:
-                    action_items += "All summarized tickets are resolved.\n"
+                    raw_action_items = "> ✅ All summarized tickets are resolved.\n"
+                action_items = f"## ⚡ **Action Items**\n\n{raw_action_items}\n---\n"
                 # Top N lists
                 assignees = [safe_get(issue, ['fields', 'assignee', 'displayName'], '') for issues_in_group in grouped.values() for issue in issues_in_group]
                 from collections import Counter
                 top_assignees = Counter(assignees).most_common(5)
-                top_n_lists = make_top_n_list(top_assignees, "Top 5 Assignees")
+                from jirassicpack.analytics.helpers import make_top_n_list
+                raw_top_n_lists = make_top_n_list(top_assignees, "Top 5 Assignees")
+                top_n_lists = f"## 🏆 **Top 5 Assignees**\n\n{raw_top_n_lists}\n---\n"
                 # Related links
-                related_links = "## Related Links\n- [Jira Dashboard](https://your-domain.atlassian.net)\n"
-                # Grouped issue sections
-                grouped_sections = ""
+                raw_related_links = "- [Jira Dashboard](https://your-domain.atlassian.net)\n"
+                related_links = f"## 🔗 **Related Links**\n\n{raw_related_links}\n---\n"
+                # Grouped issue sections with collapsible details
+                grouped_sections = "## 📚 **Grouped Issue Details**\n"
                 for group_label, issues_in_group in grouped.items():
                     anchor = str(group_label).lower().replace(' ', '-')
-                    grouped_sections += f"\n## {group_label} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
-                    grouped_sections += "| Key | Summary | Status | Resolved |\n|---|---|---|---|\n"
+                    count = len(issues_in_group)
+                    grouped_sections += f"\n<details><summary><b>{group_label} Issues ({count})</b></summary>\n\n"
+                    grouped_sections += "| **Key** | **Summary** | **Status** | **Resolved** |\n|---|---|---|---|\n"
                     for issue in issues_in_group:
+                        print("[DEBUG] Raw issue data:", issue)  # Debug print
                         key = issue.get('key', 'N/A')
                         summary = safe_get(issue, ['fields', 'summary'], '')[:40]
                         status = safe_get(issue, ['fields', 'status', 'name'], '')
                         emoji = status_emoji(status)
                         resolved = safe_get(issue, ['fields', 'resolutiondate'], '')
-                        grouped_sections += f"| {key} | {summary} | {emoji} {status} | {resolved} |\n"
-                    grouped_sections += "\n"
-                export_metadata = f"---\n**Report generated by:** {user_email}  \n**Run at:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
-                glossary = "## Glossary\n- ✅ Done/Closed/Resolved\n- 🟡 In Progress/In Review/Doing\n- 🔴 Blocked/On Hold/Overdue\n- ⬜️ Other statuses\n"
-                next_steps = "## Next Steps\n- Review ticket summaries for trends or bottlenecks.\n"
+                        grouped_sections += f"| `{key}` | _{summary}_ | {emoji} `{status}` | `{resolved}` |\n"
+                    grouped_sections += "\n</details>\n"
+                # Glossary and next steps
+                glossary = "## 🧩 **Glossary**\n- ✅ Done/Closed/Resolved\n- 🟡 In Progress/In Review/Doing\n- 🔴 Blocked/On Hold/Overdue\n- ⬜️ Other statuses\n"
+                next_steps = "## 🚀 **Next Steps**\n- Review ticket summaries for trends or bottlenecks.\n"
                 # Compose final report using build_report_sections
                 sections = {
                     'header': header,
@@ -270,6 +364,8 @@ def summarize_tickets(
                     'glossary': glossary,
                     'next_steps': next_steps,
                 }
+                # Debug print for summary section
+                print("\n[DEBUG] summary section content:\n", sections.get('summary'))
                 content = build_report_sections(sections)
                 params_list = [("user", display_name if display_name else account_id), ("start", start_date), ("end", end_date)]
                 filename = make_output_filename("summarize_tickets", params_list, output_dir)

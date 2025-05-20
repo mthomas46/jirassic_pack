@@ -38,3 +38,5 @@ FEATURE_MANIFEST = [
     {"key": "summarize_tickets", "label": "Summarize tickets", "emoji": "🗂️", "group": "Analytics & Reporting", "module": summarize_tickets, "description": "Generate summary reports for Jira tickets, including grouping, top assignees, and action items."},
     # Add other features as needed
 ]
+
+FEATURE_REGISTRY = {f["key"]: f["module"] for f in FEATURE_MANIFEST}

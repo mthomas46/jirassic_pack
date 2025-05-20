@@ -9,12 +9,16 @@ Prompts for user and date range, fetches issues with worklogs, and outputs a Mar
 # This feature summarizes worklogs for a given Jira user and timeframe.
 # It prompts for user, start/end dates, fetches issues with worklogs, and outputs a Markdown report with worklog details per issue.
 
-from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, info, validate_date, error, spinner, info_spared_no_expense, safe_get, require_param, feature_error_handler, prompt_with_schema, write_report
+from jirassicpack.utils.output_utils import ensure_output_dir, celebrate_success, write_report
+from jirassicpack.utils.message_utils import retry_or_skip, info, error
+from jirassicpack.utils.validation_utils import get_option, safe_get, require_param, prompt_with_schema
+from jirassicpack.utils.decorators import feature_error_handler
+from jirassicpack.utils.progress_utils import spinner
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from datetime import datetime
 from typing import Any, Dict, List
 import time
-from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
+from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty, validate_date
 from marshmallow import fields
 from collections import Counter
 from jirassicpack.analytics.helpers import build_report_sections, aggregate_issue_stats, make_summary_section, make_top_n_list
@@ -185,11 +189,11 @@ def time_tracking_worklogs(
     start_time = time.time()
     try:
         contextual_log('info', f"⏳ [time_tracking_worklogs] Feature entry | User: {user_email} | Params: {redact_sensitive(params)} | Suffix: {unique_suffix}", operation="feature_start", params=redact_sensitive(params), status="started", extra=context, feature='time_tracking_worklogs')
-        if not require_param(params, 'user', context):
+        if not require_param(params.get('user'), 'user'):
             return
-        if not require_param(params, 'start_date', context):
+        if not require_param(params.get('start_date'), 'start_date'):
             return
-        if not require_param(params, 'end_date', context):
+        if not require_param(params.get('end_date'), 'end_date'):
             return
         user = params.get('user')
         start_date = params.get('start_date')
