@@ -1,3 +1,10 @@
+"""
+deep_ticket_summary.py
+
+Feature module for generating a deep summary report for a single Jira ticket via the CLI.
+Fetches all available information (description, comments, changelog, fields, etc.) and outputs a detailed Markdown report for audit and review.
+"""
+
 from jirassicpack.utils.io import ensure_output_dir, info, spinner, safe_get, get_option, status_emoji, feature_error_handler, write_report
 from jirassicpack.utils.logging import contextual_log, build_context
 from jirassicpack.config import ConfigLoader

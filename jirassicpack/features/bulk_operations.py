@@ -1,3 +1,11 @@
+"""
+bulk_operations.py
+
+Feature module for performing bulk operations on Jira issues via the CLI.
+Supports bulk transitions, comments, and assignments on multiple issues selected by JQL.
+Outputs a Markdown and JSON report with the results for traceability and audit.
+"""
+
 # bulk_operations.py
 # This feature provides bulk operations for Jira issues, such as transitioning, commenting, or assigning multiple issues at once.
 # It prompts the user for the desired action, the JQL to select issues, and the value for the action (if needed).
@@ -60,6 +68,7 @@ def bulk_operations(
     orig_update_issue = getattr(jira, 'update_issue', None)
     if orig_create_issue:
         def log_create_issue(*args, **kwargs):
+            # Log the call and response for auditing
             contextual_log('debug', "🦴 [Bulk Operations] Jira create_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
             resp = orig_create_issue(*args, **kwargs)
             contextual_log('debug', f"🦴 [Bulk Operations] Jira create_issue response: {redact_sensitive(resp)}", extra=context, feature='bulk_operations')
@@ -67,6 +76,7 @@ def bulk_operations(
         jira.create_issue = log_create_issue
     if orig_update_issue:
         def log_update_issue(*args, **kwargs):
+            # Log the call and response for auditing
             contextual_log('debug', "🦴 [Bulk Operations] Jira update_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
             resp = orig_update_issue(*args, **kwargs)
             contextual_log('debug', f"🦴 [Bulk Operations] Jira update_issue response: {redact_sensitive(resp)}", extra=context, feature='bulk_operations')
@@ -94,6 +104,7 @@ def bulk_operations(
         info(BULK_OPERATION_CANCELLED, extra=context, feature='bulk_operations')
         return
     def do_search():
+        # Spinner and retry logic for robust search
         with spinner("🦴 Running Bulk Operations..."):
             return jira.search_issues(jql, fields=["key"], max_results=100)
     issues = retry_or_skip("Fetching issues for bulk operation", do_search)
@@ -105,6 +116,7 @@ def bulk_operations(
     for issue in progress_bar(issues, desc=f"🦴 Bulk: {action}"):
         key = issue.get('key', 'N/A')
         def do_action():
+            # Spinner and retry logic for each bulk action
             with spinner(f"🦴 Running Bulk {action} for {key}..."):
                 if action == 'transition':
                     jira.transition_issue(key, value)
@@ -165,6 +177,10 @@ def bulk_operations(
     contextual_log('info', f"🦴 [Bulk Operations] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}). Duration: {duration}ms.", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='bulk_operations')
 
 class BulkOptionsSchema(BaseOptionsSchema):
+    """
+    Marshmallow schema for validating bulk operation options.
+    Fields: action, jql, value.
+    """
     action = fields.Str(required=True, validate=validate.OneOf(['transition', 'comment', 'assign']), error_messages={"required": "Action is required."})
     jql = fields.Str(required=True, validate=validate_nonempty, error_messages={"required": "JQL is required."})
     value = fields.Str(allow_none=True, validate=validate_nonempty)

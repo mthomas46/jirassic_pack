@@ -1,3 +1,11 @@
+"""
+user_team_analytics.py
+
+Feature module for analyzing team workload and user activity in Jira via the CLI.
+Prompts for team members and timeframe, then aggregates and reports on issues assigned to each member.
+Outputs a Markdown report with workload, bottleneck, and breakdown analysis for audit and improvement.
+"""
+
 # user_team_analytics.py
 # This feature analyzes team workload in Jira by counting issues assigned to each team member in a given timeframe.
 # It prompts for team members, start/end dates, and outputs a Markdown report with workload and bottleneck analysis.
@@ -61,6 +69,18 @@ def user_team_analytics(
     batch_index: int = None,
     unique_suffix: str = None
 ) -> None:
+    """
+    Main feature entrypoint for user/team analytics in Jira.
+    Aggregates issue stats for each selected user and generates a detailed Markdown report.
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (Dict[str, Any]): Parameters for the analytics (team, start_date, end_date, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+    Returns:
+        None. Writes Markdown report to disk.
+    """
     correlation_id = params.get('correlation_id')
     context = build_context("user_team_analytics", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()
@@ -114,6 +134,7 @@ def user_team_analytics(
             f"AND updated <= '{end_date}'"
         )
         def do_user_analytics():
+            # Spinner and retry logic for robust user analytics
             with spinner(f"🧬 Fetching issues for {user}..."):
                 return jira.search_issues(
                     user_jql,

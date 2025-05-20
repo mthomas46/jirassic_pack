@@ -1,3 +1,10 @@
+"""
+advanced_metrics.py
+
+Feature module for generating advanced metrics reports for Jira issues via the CLI.
+Prompts for user and timeframe, fetches completed issues, and outputs a Markdown report with bottleneck analysis, breakdowns, and top-N analytics.
+"""
+
 # advanced_metrics.py
 # This feature calculates advanced metrics for Jira issues, such as cycle time and lead time, for a given user and timeframe.
 # It prompts for user, start/end dates, fetches completed issues, and outputs a Markdown report with a metrics table.
@@ -16,6 +23,10 @@ from jirassicpack.constants import SEE_NOBODY_CARES, FAILED_TO
 logger = logging.getLogger(__name__)
 
 class AdvancedMetricsOptionsSchema(BaseOptionsSchema):
+    """
+    Marshmallow schema for validating advanced metrics options.
+    Fields: user, start_date, end_date, output_dir, unique_suffix.
+    """
     user = fields.Str(required=True, error_messages={"required": "Jira user is required."}, validate=validate_nonempty)
     start_date = fields.Str(required=True, error_messages={"required": "Start date is required."}, validate=validate_date)
     end_date = fields.Str(required=True, error_messages={"required": "End date is required."}, validate=validate_date)

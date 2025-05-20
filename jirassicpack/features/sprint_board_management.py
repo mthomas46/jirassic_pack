@@ -1,6 +1,9 @@
-# sprint_board_management.py
-# This feature summarizes the state of a Jira board, including all sprints and issues in the active sprint.
-# It prompts for the board name, fetches board/sprint/issue data, and outputs a Markdown report for review or sharing.
+"""
+sprint_board_management.py
+
+Feature module for summarizing the state of a Jira board and its sprints via the CLI.
+Prompts for board and sprint name, fetches board/sprint/issue data, and outputs a Markdown report for review or sharing.
+"""
 
 from typing import Any, Dict
 from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, info, feature_error_handler, prompt_with_schema, write_report, error
@@ -12,6 +15,10 @@ from jirassicpack.constants import SEE_NOBODY_CARES, FAILED_TO, REPORT_WRITE_ERR
 from jirassicpack.analytics.helpers import build_report_sections
 
 class SprintBoardManagementOptionsSchema(BaseOptionsSchema):
+    """
+    Marshmallow schema for validating sprint/board management options.
+    Fields: board_name, sprint_name.
+    """
     board_name = fields.Str(required=True, error_messages={"required": "Board name is required."})
     sprint_name = fields.Str(required=True, error_messages={"required": "Sprint name is required."})
     # output_dir and unique_suffix are inherited

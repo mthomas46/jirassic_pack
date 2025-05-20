@@ -1,3 +1,13 @@
+"""
+features/__init__.py
+
+Defines the feature manifest and registry for the Jirassic Pack CLI.
+Each feature is imported and registered with metadata for dynamic menu generation and dispatch.
+
+- FEATURE_MANIFEST: List of all available features, their keys, labels, groups, and modules.
+- Used by the CLI to build menus, validate features, and dispatch handlers.
+"""
+
 from .create_issue import create_issue
 from .update_issue import update_issue
 from .sprint_board_management import sprint_board_management
@@ -11,7 +21,9 @@ from .deep_ticket_summary import deep_ticket_summary
 from .gather_metrics import gather_metrics
 from .summarize_tickets import summarize_tickets
 
+# FEATURE_MANIFEST: List of all features with metadata for menu and dispatch
 FEATURE_MANIFEST = [
+    # Each entry: key, label, emoji, group, module, description
     {"key": "create_issue", "label": "Create a new issue", "emoji": "📝", "group": "Issues & Tasks", "module": create_issue, "description": "Create a new Jira issue by entering project, summary, description, and type."},
     {"key": "update_issue", "label": "Update an existing issue", "emoji": "✏️", "group": "Issues & Tasks", "module": update_issue, "description": "Update a field on an existing Jira issue (e.g., status, assignee, custom fields)."},
     {"key": "bulk_operations", "label": "Bulk operations", "emoji": "🔁", "group": "Issues & Tasks", "module": bulk_operations, "description": "Perform bulk transitions, comments, or assignments on multiple issues via JQL."},

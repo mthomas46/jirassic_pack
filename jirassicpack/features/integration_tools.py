@@ -1,3 +1,10 @@
+"""
+integration_tools.py
+
+Feature module for scanning Jira issues for integration links (e.g., GitHub/GitLab PRs) via the CLI.
+Prompts for JQL, extracts PR links from issue descriptions and comments, and outputs a Markdown report for traceability.
+"""
+
 from typing import Any, Dict, List, Tuple
 from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, safe_get, require_param, info, error, feature_error_handler, prompt_with_schema, write_report
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
@@ -9,6 +16,10 @@ from jirassicpack.constants import SEE_NOBODY_CARES, FAILED_TO
 from jirassicpack.analytics.helpers import build_report_sections
 
 class IntegrationOptionsSchema(BaseOptionsSchema):
+    """
+    Marshmallow schema for validating integration options.
+    Fields: integration_jql.
+    """
     integration_jql = fields.Str(required=True, error_messages={"required": "JQL is required for integration scan."}, validate=validate_nonempty)
     # output_dir and unique_suffix are inherited
 

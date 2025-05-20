@@ -1,3 +1,10 @@
+"""
+time_tracking_worklogs.py
+
+Feature module for summarizing Jira worklogs for a user and timeframe via the CLI.
+Prompts for user and date range, fetches issues with worklogs, and outputs a Markdown report with worklog details and analytics.
+"""
+
 # time_tracking_worklogs.py
 # This feature summarizes worklogs for a given Jira user and timeframe.
 # It prompts for user, start/end dates, fetches issues with worklogs, and outputs a Markdown report with worklog details per issue.
@@ -17,6 +24,10 @@ from jirassicpack.constants import NO_WORKLOGS_FOUND, REPORT_WRITE_ERROR
 _CACHED_JIRA_USERS = None
 
 class TimeTrackingOptionsSchema(BaseOptionsSchema):
+    """
+    Marshmallow schema for validating time tracking/worklog options.
+    Fields: user, start_date, end_date.
+    """
     user = fields.Str(required=True, error_messages={"required": "User is required."}, validate=validate_nonempty)
     start_date = fields.Str(required=True, error_messages={"required": "Start date is required."}, validate=validate_date)
     end_date = fields.Str(required=True, error_messages={"required": "End date is required."}, validate=validate_date)
@@ -204,9 +215,8 @@ def time_tracking_worklogs(
         contextual_log('debug', f"[DEBUG] Using JQL: {jql}", extra=context, feature='time_tracking_worklogs')
         contextual_log('debug', f"[DEBUG] Using user: {user}", extra=context, feature='time_tracking_worklogs')
         def do_worklogs():
-            with spinner("⏳ Running Time Tracking Worklogs..."):
-                issues = jira.search_issues(jql, fields=["worklog", "key", "summary"], max_results=100)
-                return generate_worklog_summary(issues, start_date, end_date)
+            with spinner(f"⏳ Fetching worklogs for {user}..."):
+                return jira.search_issues(jql, fields=["key", "summary", "worklog"], max_results=100)
         filtered_issues = retry_or_skip("Generating worklog summary from Jira issues", do_worklogs)
         if not filtered_issues:
             info(NO_WORKLOGS_FOUND, extra={**context, "feature": "time_tracking_worklogs"})

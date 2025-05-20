@@ -1,3 +1,11 @@
+"""
+update_issue.py
+
+Feature module for updating a field on an existing Jira issue via the CLI.
+Prompts the user for issue key, field, and new value, then updates the issue in Jira.
+Outputs a Markdown and JSON report with the updated field and value for record-keeping and audit.
+"""
+
 # update_issue.py
 # This feature allows users to update a field on an existing Jira issue by prompting for the issue key, field, and new value.
 # It writes the updated field and value to a Markdown file for record-keeping.
@@ -15,6 +23,10 @@ from jirassicpack.analytics.helpers import build_report_sections
 from jirassicpack.constants import FAILED_TO
 
 class UpdateIssueOptionsSchema(BaseOptionsSchema):
+    """
+    Marshmallow schema for validating update issue options.
+    Fields: issue_key, field, value.
+    """
     issue_key = IssueKeyField(required=True, error_messages={"required": "Issue key is required."})
     field = fields.Str(required=True, error_messages={"required": "Field is required."}, validate=validate_nonempty)
     value = fields.Str(required=True, error_messages={"required": "Value is required."}, validate=validate_nonempty)
@@ -85,12 +97,14 @@ def update_issue(
     orig_update_issue = getattr(jira, 'update_issue', None)
     if orig_update_issue:
         def log_update_issue(*args, **kwargs):
+            # Log the call and response for auditing
             contextual_log('debug', "🦕 [Update Issue] Jira update_issue called with args and redacted kwargs.", extra=context, feature='update_issue')
             resp = orig_update_issue(*args, **kwargs)
             contextual_log('debug', f"🦕 [Update Issue] Jira update_issue response: {redact_sensitive(resp)}", extra=context, feature='update_issue')
             return resp
         jira.update_issue = log_update_issue
     def do_update():
+        # Spinner and retry logic for robust update
         with spinner("🦕 Running Update Issue..."):
             return jira.update_issue(
                 issue_key=issue_key,
@@ -98,6 +112,7 @@ def update_issue(
             )
     result = retry_or_skip("Updating Jira issue", do_update)
     if result is None:
+        # If update failed or was skipped, log and exit
         from jirassicpack.constants import SEE_NOBODY_CARES
         info(SEE_NOBODY_CARES, extra=context)
         contextual_log('warning', "No update was made.", operation="feature_end", status="skipped", extra=context, feature='update_issue')

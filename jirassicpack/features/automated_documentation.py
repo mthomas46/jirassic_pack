@@ -1,3 +1,10 @@
+"""
+automated_documentation.py
+
+Feature module for generating automated documentation (release notes, changelogs, sprint reviews) from Jira issues via the CLI.
+Prompts for doc type, project, and filters, then fetches issues and outputs a Markdown report with grouped and summarized content.
+"""
+
 # automated_documentation.py
 # This feature generates automated documentation from Jira issues, such as release notes, changelogs, or sprint reviews.
 # It prompts the user for the documentation type, project, and relevant filters (version or sprint), then fetches issues and writes a Markdown report.
@@ -14,6 +21,10 @@ from jirassicpack.analytics.helpers import build_report_sections
 from jirassicpack.constants import SEE_NOBODY_CARES, FAILED_TO
 
 class AutomatedDocOptionsSchema(BaseOptionsSchema):
+    """
+    Marshmallow schema for validating automated documentation options.
+    Fields: doc_type, project, version, sprint.
+    """
     doc_type = fields.Str(required=True, error_messages={"required": "Documentation type is required."}, validate=validate.OneOf(['Release notes', 'Changelog', 'Sprint Review']))
     project = ProjectKeyField(required=True, error_messages={"required": "Project key is required."}, validate=validate_nonempty)
     version = fields.Str(load_default='')
@@ -229,7 +240,7 @@ def automated_documentation(
             jql = f'project = "{project}" AND statusCategory = Done'
         def do_search():
             with spinner("📄 Running Automated Documentation..."):
-                return jira.search_issues(jql, fields=["key", "summary"], max_results=100)
+                return jira.search_issues(jql, fields=["key", "summary", "status", "assignee", "components", "created", "updated", "issuetype", "fixVersions", "sprint", "project", "duedate"], max_results=100)
         try:
             issues = retry_or_skip("Fetching issues for documentation", do_search)
         except Exception as e:

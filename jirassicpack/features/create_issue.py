@@ -1,3 +1,11 @@
+"""
+create_issue.py
+
+Feature module for creating a new Jira issue via the CLI.
+Prompts the user for project, summary, description, and issue type, then creates the issue in Jira.
+Outputs a Markdown and JSON report with the created issue's details for record-keeping and audit.
+"""
+
 # create_issue.py
 # This feature allows users to create a new Jira issue by prompting for project, summary, description, and issue type.
 # It writes the created issue's key and summary to a Markdown file for record-keeping.
@@ -15,6 +23,10 @@ from jirassicpack.constants import SEE_NOBODY_CARES, IS_REQUIRED
 from jirassicpack.analytics.helpers import build_report_sections
 
 class CreateIssueOptionsSchema(BaseOptionsSchema):
+    """
+    Marshmallow schema for validating create issue options.
+    Fields: project, summary, description, issue_type.
+    """
     project = ProjectKeyField(required=True, error_messages={"required": "Project key is required."})
     summary = fields.Str(required=True, error_messages={"required": "Summary is required."}, validate=validate_nonempty)
     description = fields.Str(load_default='', validate=validate_nonempty)
@@ -68,6 +80,7 @@ def create_issue(
     orig_create_issue = getattr(jira, 'create_issue', None)
     if orig_create_issue:
         def log_create_issue(*args, **kwargs):
+            # Log the call and response for auditing
             contextual_log('debug', "🦖 [Create Issue] Jira create_issue called with args and redacted kwargs.", extra=context, feature='create_issue')
             resp = orig_create_issue(*args, **kwargs)
             contextual_log('debug', f"🦖 [Create Issue] Jira create_issue response: {redact_sensitive(resp)}", extra=context, feature='create_issue')
@@ -87,6 +100,7 @@ def create_issue(
     unique_suffix = params.get('unique_suffix', '')
     ensure_output_dir(output_dir)
     def do_create():
+        # Spinner and retry logic for robust issue creation
         with spinner("🦖 Running Create Issue..."):
             return jira.create_issue(
                 project=project,
@@ -96,6 +110,7 @@ def create_issue(
             )
     issue = retry_or_skip("Creating Jira issue", do_create)
     if not issue:
+        # If creation failed or was skipped, log and exit
         info(SEE_NOBODY_CARES, extra=context, feature='create_issue')
         contextual_log('warning', "No issue was created.", operation="feature_end", status="skipped", extra=context, feature='create_issue')
         return
