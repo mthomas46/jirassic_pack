@@ -1,11 +1,12 @@
 import os
-from jirassicpack.features.ticket_discussion_summary import call_local_llm_text, call_local_llm_file, call_local_llm_github_pr
-from jirassicpack.utils.io import prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
+from jirassicpack.features.ticket_discussion_summary import call_local_llm_text, call_local_llm_github_pr
+from jirassicpack.utils.io import prompt_text, prompt_select, prompt_password, prompt_path, feature_error_handler
 import requests
 from jirassicpack.config import ConfigLoader
 
 llm_config = ConfigLoader().get_llm_config()
 
+@feature_error_handler('test_local_llm')
 def test_local_llm(params=None, user_email=None, batch_index=None, unique_suffix=None):
     """
     Interactive feature to test the local LLM endpoints with a prompt, file, github-pr, or health check.

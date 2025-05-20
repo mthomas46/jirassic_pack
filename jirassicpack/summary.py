@@ -4,16 +4,18 @@ summary.py
 Generates summary reports for Jira tickets, including grouping, top assignees, and action items. Provides interactive prompts for user/date selection and outputs professional Markdown reports. Used for analytics and reporting features in Jirassic Pack CLI.
 """
 import os
-import questionary
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_required, validate_date, safe_get, write_markdown_file, require_param, render_markdown_report, make_output_filename, render_markdown_report_template, status_emoji
+from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_date, safe_get, require_param, render_markdown_report, make_output_filename, status_emoji, write_report, log_entry_exit
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
-from jirassicpack.features.time_tracking_worklogs import select_jira_user
+from jirassicpack.utils.jira import select_jira_user
 from datetime import datetime
 import time
 from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
-from mdutils.mdutils import MdUtils
 from typing import Any
+from jirassicpack.analytics.helpers import build_report_sections, group_issues_by_field, make_top_n_list
+import logging
+import traceback
+from functools import wraps
 
 class SummarizeTicketsOptionsSchema(Schema):
     user = fields.Str(required=True)
@@ -23,11 +25,13 @@ class SummarizeTicketsOptionsSchema(Schema):
 def prompt_summarize_tickets_options(options: dict, jira: Any = None) -> dict:
     """
     Prompt for summarize tickets options, always requiring explicit user selection. Config/env value is only used if the user selects it.
+
     Args:
         options (dict): Options/config dictionary.
         jira (Any, optional): Jira client for interactive selection.
+
     Returns:
-        dict: Validated options for the feature.
+        dict: Validated options for the feature, or None if aborted.
     """
     info(f"[DEBUG] prompt_summarize_tickets_options called. jira is {'present' if jira else 'None'}. options: {options}")
     config_user = options.get('user') or os.environ.get('JIRA_USER')
@@ -36,45 +40,17 @@ def prompt_summarize_tickets_options(options: dict, jira: Any = None) -> dict:
     display_name = None
     if jira:
         info("Please select a Jira user for ticket summarization.")
-        menu_choices = [
-            "Search for a user",
-            "Pick from list",
-            "Use current user",
-        ]
-        if config_user:
-            menu_choices.append(f"Use value from config/env: {config_user}")
-        menu_choices += ["Enter manually", "Abort"]
-        while True:
-            method = questionary.select("How would you like to select the user?", choices=menu_choices).ask()
-            if method == "Search for a user":
-                label, user_obj = select_jira_user(jira)
-                username = user_obj.get('accountId') if user_obj else None
-                display_name = user_obj.get('displayName') if user_obj else None
-            elif method == "Pick from list":
-                label, user_obj = select_jira_user(jira)
-                username = user_obj.get('accountId') if user_obj else None
-                display_name = user_obj.get('displayName') if user_obj else None
-            elif method == "Use current user":
-                try:
-                    me = jira.get_current_user()
-                    username = me.get('accountId')
-                    display_name = me.get('displayName')
-                except Exception:
-                    info("Could not retrieve current user from Jira.")
-                    continue
-            elif method.startswith("Use value from config/env"):
-                username = config_user
-                display_name = None
-            elif method == "Enter manually":
-                username = questionary.text("Enter Jira accountId or username:").ask()
-                display_name = None
-            elif method == "Abort":
-                info("Aborted user selection for ticket summarization.")
-                return None
-            if username:
-                break
+        label, user_obj = select_jira_user(jira, default_user=config_user)
+        username = user_obj.get('accountId') if user_obj else None
+        display_name = user_obj.get('displayName') if user_obj else None
+        if not username:
+            info("❌ Aborted summarize tickets prompt.")
+            return None
     else:
-        username = get_option(options, 'user', prompt="Jira Username for summary:", default=config_user, required=True)
+        username = get_option(options, 'user', prompt="Jira Username for summary:", default=config_user, required=True, abort_option=True)
+        if username == "__ABORT__":
+            info("❌ Aborted summarize tickets prompt.")
+            return None
         display_name = None
     config_start = options.get('start_date') or os.environ.get('JIRA_START_DATE', '2024-01-01')
     config_end = options.get('end_date') or os.environ.get('JIRA_END_DATE', '2024-01-31')
@@ -108,6 +84,8 @@ def prompt_summarize_tickets_options(options: dict, jira: Any = None) -> dict:
         'unique_suffix': unique_suffix,
         'acceptance_criteria_field': ac_field
     }
+
+prompt_summarize_tickets_options = log_entry_exit(prompt_summarize_tickets_options)
 
 def summarize_tickets(
     jira: Any,
@@ -202,18 +180,16 @@ def summarize_tickets(
             filename = make_output_filename("summarize_tickets", params_list, output_dir)
             contextual_log('info', f"[summarize_tickets] Attempting to write empty report to {filename}", extra=context, feature='summarize_tickets')
             try:
-                md_file = MdUtils(file_name=filename, title="Ticket Summary Report")
-                md_file.new_header(level=1, title="Ticket Summary Report")
-                md_file.new_line(f"_Generated: {datetime.now()}_")
-                md_file.new_header(level=2, title="Summary")
-                md_file.new_line(f"# 🗂️ Ticket Summary Report\n\n**No issues found for the given parameters.**\n\nJQL: {jql}\nUser: {username}\nDate Range: {start_date} to {end_date}")
-                md_file.create_md_file()
-                import os
-                abs_path = os.path.abspath(filename)
-                if os.path.exists(abs_path):
-                    info(f"🦖 Ticket summary report successfully written to {abs_path}")
-                else:
-                    error(f"[summarize_tickets] File write failed! Expected at: {abs_path}")
+                empty_report = render_markdown_report(
+                    feature="summarize_tickets",
+                    user=user_email,
+                    batch=batch_index,
+                    suffix=unique_suffix,
+                    feature_title="Ticket Summarization",
+                    summary_section=f"**No issues found for the given parameters.**\n\nJQL: {jql}\nUser: {username}\nDate Range: {start_date} to {end_date}"
+                )
+                write_report(filename, empty_report, context, filetype='md', feature='summarize_tickets', item_name='Ticket summary report (empty)')
+                info(f"🗂️ Ticket summary written to {filename}", extra=context, feature='summarize_tickets')
             except Exception as e:
                 contextual_log('error', f"[summarize_tickets] Exception while writing empty report: {e}", exc_info=True, extra=context, feature='summarize_tickets')
                 error(f"[summarize_tickets] Exception while writing empty report: {e}", extra=context, feature='summarize_tickets')
@@ -237,13 +213,9 @@ def summarize_tickets(
                 ).ask()
                 grouping_label, grouping_path = next(f for f in grouping_fields if f[0] == grouping_choice)
                 info(f"[summarize_tickets] Grouping by: {grouping_label} (path: {grouping_path})")
-                # Group by selected field
-                from collections import defaultdict, Counter
-                grouped = defaultdict(list)
-                for issue in issues:
-                    group_val = safe_get(issue, grouping_path, f"Other {grouping_label}")
-                    grouped[group_val].append(issue)
-                # Header
+                # Group by selected field (now using helper)
+                grouped = group_issues_by_field(issues, grouping_path, f"Other {grouping_label}")
+                # Build sections using helpers
                 header = f"# 🗂️ Ticket Summary Report\n\n"
                 header += f"**Feature:** Summarize Tickets  "
                 header += f"**User:** {display_name} ({account_id})  "
@@ -251,20 +223,11 @@ def summarize_tickets(
                 header += f"**Total issues completed:** {total_issues}  "
                 header += f"**Grouped by:** {grouping_label}  "
                 header += "\n\n---\n\n"
-                # Table of contents
-                toc = "## Table of Contents\n"
-                for group_val in grouped:
-                    anchor = str(group_val).lower().replace(' ', '-').replace('/', '-')
-                    toc += f"- [{group_val}](#{anchor}-issues)\n"
-                toc += "\n"
-                # Summary table
-                summary_table = f"| {grouping_label} | Count |\n|---|---|\n"
-                for group_val, group in grouped.items():
-                    summary_table += f"| {group_val} | {len(group)} |\n"
-                summary_table += "\n---\n\n"
-                # Action items: none for completed tickets, but highlight if any are not resolved
-                action_items = "## Action Items\n"
+                toc = "## Table of Contents\n" + "\n".join(f"- [{group_val}](#{str(group_val).lower().replace(' ', '-').replace('/', '-')}-issues)" for group_val in grouped) + "\n"
+                summary_table = f"| {grouping_label} | Count |\n|---|---|\n" + "\n".join(f"| {group_val} | {len(group)} |" for group_val, group in grouped.items()) + "\n---\n\n"
+                # Action items
                 not_resolved = [i for group in grouped.values() for i in group if safe_get(i, ['fields', 'status', 'name'], '').lower() not in ['done', 'closed', 'resolved']]
+                action_items = "## Action Items\n"
                 if not_resolved:
                     action_items += "### Not Resolved\n"
                     for issue in not_resolved:
@@ -276,18 +239,15 @@ def summarize_tickets(
                     action_items += "All summarized tickets are resolved.\n"
                 # Top N lists
                 assignees = [safe_get(i, ['fields', 'assignee', 'displayName'], '') for group in grouped.values() for i in group]
+                from collections import Counter
                 top_assignees = Counter(assignees).most_common(5)
-                top_n_lists = "## Top 5 Assignees\n"
-                for name, count in top_assignees:
-                    if name:
-                        top_n_lists += f"- {name}: {count} tickets\n"
+                top_n_lists = make_top_n_list(top_assignees, "Top 5 Assignees")
                 # Related links
-                related_links = "## Related Links\n"
-                related_links += "- [Jira Dashboard](https://your-domain.atlassian.net)\n"
+                related_links = "## Related Links\n- [Jira Dashboard](https://your-domain.atlassian.net)\n"
                 # Grouped issue sections
                 grouped_sections = ""
                 for itype, group in grouped.items():
-                    anchor = itype.lower().replace(' ', '-')
+                    anchor = str(itype).lower().replace(' ', '-')
                     grouped_sections += f"\n## {itype} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
                     grouped_sections += "| Key | Summary | Status | Resolved |\n|---|---|---|---|\n"
                     for issue in group:
@@ -298,39 +258,27 @@ def summarize_tickets(
                         resolved = safe_get(issue, ['fields', 'resolutiondate'], '')
                         grouped_sections += f"| {key} | {summary} | {emoji} {status} | {resolved} |\n"
                     grouped_sections += "\n"
-                # Export metadata
                 export_metadata = f"---\n**Report generated by:** {user_email}  \n**Run at:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
-                # Glossary
                 glossary = "## Glossary\n- ✅ Done/Closed/Resolved\n- 🟡 In Progress/In Review/Doing\n- 🔴 Blocked/On Hold/Overdue\n- ⬜️ Other statuses\n"
-                # Next steps
                 next_steps = "## Next Steps\n- Review ticket summaries for trends or bottlenecks.\n"
-                # Query Parameters Used
-                query_params_used = f"## Query Parameters Used\n- JQL: {jql}\n- Filters: {redact_sensitive(params)}\n- Note: This query is restrictive as it only includes issues that are resolved within the specified date range."
-                # Compose final report
+                # Compose final report using build_report_sections
+                sections = {
+                    'header': header,
+                    'toc': toc,
+                    'summary': summary_table,
+                    'action_items': action_items,
+                    'top_n': top_n_lists,
+                    'related_links': related_links,
+                    'grouped_sections': grouped_sections,
+                    'metadata': export_metadata,
+                    'glossary': glossary,
+                    'next_steps': next_steps,
+                }
+                content = build_report_sections(sections)
                 params_list = [("user", display_name if display_name else account_id), ("start", start_date), ("end", end_date)]
                 filename = make_output_filename("summarize_tickets", params_list, output_dir)
-                md_file = MdUtils(file_name=filename, title="Ticket Summary Report")
-                md_file.new_header(level=1, title="Ticket Summary Report")
-                md_file.new_line(f"_Generated: {datetime.now()}_")
-                md_file.new_header(level=2, title="Summary")
-                md_file.new_line(header)
-                md_file.new_line(toc)
-                md_file.new_line(query_params_used)
-                md_file.new_line(summary_table)
-                md_file.new_line(action_items)
-                md_file.new_line(top_n_lists)
-                md_file.new_line(related_links)
-                md_file.new_line(grouped_sections)
-                md_file.new_line(export_metadata)
-                md_file.new_line(glossary)
-                md_file.new_line(next_steps)
-                md_file.create_md_file()
-                import os
-                abs_path = os.path.abspath(filename)
-                if os.path.exists(abs_path):
-                    info(f"🦖 Ticket summary report successfully written to {abs_path}")
-                else:
-                    error(f"[summarize_tickets] File write failed! Expected at: {abs_path}")
+                write_report(filename, content, context, filetype='md', feature='summarize_tickets', item_name='Ticket summary report')
+                info(f"🗂️ Ticket summary written to {filename}", extra=context, feature='summarize_tickets')
             except Exception as e:
                 import traceback
                 contextual_log('error', f"[summarize_tickets][FULL REPORT] Exception occurred: {e}", exc_info=True, operation="write_report", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='summarize_tickets')
@@ -352,3 +300,5 @@ def summarize_tickets(
         questionary.print("\n🦖 An error occurred while generating the ticket summary report. Returning to the previous menu.", style="bold fg:red")
         questionary.select("Select an option:", choices=["Return to previous menu"]).ask()
         return 
+
+summarize_tickets = log_entry_exit(summarize_tickets) 

@@ -2,53 +2,53 @@
 # This feature summarizes the state of a Jira board, including all sprints and issues in the active sprint.
 # It prompts for the board name, fetches board/sprint/issue data, and outputs a Markdown report for review or sharing.
 
-from typing import Any, Dict, List
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, info, get_option
+from typing import Any, Dict
+from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, info, feature_error_handler, prompt_with_schema, write_report, error
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
-from jirassicpack.utils.io import error, render_markdown_report
-from jirassicpack.utils.jira import select_board_name, select_sprint_name
 import time
-from marshmallow import Schema, fields, ValidationError, pre_load
-from jirassicpack.utils.rich_prompt import rich_error
+from marshmallow import fields
 from jirassicpack.utils.fields import BaseOptionsSchema
+from jirassicpack.constants import SEE_NOBODY_CARES, FAILED_TO, REPORT_WRITE_ERROR
+from jirassicpack.analytics.helpers import build_report_sections
 
 class SprintBoardManagementOptionsSchema(BaseOptionsSchema):
     board_name = fields.Str(required=True, error_messages={"required": "Board name is required."})
     sprint_name = fields.Str(required=True, error_messages={"required": "Sprint name is required."})
     # output_dir and unique_suffix are inherited
 
-def prompt_sprint_board_management_options(options: dict) -> dict:
+def prompt_sprint_board_options(opts: dict, jira: Any = None) -> dict:
     """
-    Prompt for sprint board options using get_option utility and validate with schema.
+    Prompt for sprint/board management options using Marshmallow schema for validation.
+
+    Args:
+        opts (dict): Initial options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+
+    Returns:
+        dict: Validated options for the feature, or None if aborted.
     """
     schema = SprintBoardManagementOptionsSchema()
-    while True:
-        board_name = get_option(options, 'board_name', prompt="Jira Board Name:", required=True)
-        sprint_name = get_option(options, 'sprint_name', prompt="Sprint Name:", required=True)
-        output_dir = get_option(options, 'output_dir', default='output')
-        unique_suffix = options.get('unique_suffix', '')
-        data = {
-            'board_name': board_name,
-            'sprint_name': sprint_name,
-            'output_dir': output_dir,
-            'unique_suffix': unique_suffix
-        }
-        try:
-            validated = schema.load(data)
-            return validated
-        except ValidationError as err:
-            for field, msgs in err.messages.items():
-                suggestion = None
-                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
-                    message, suggestion = msgs[0]
-                elif isinstance(msgs, list) and msgs:
-                    message = msgs[0]
-                else:
-                    message = str(msgs)
-                rich_error(f"Input validation error for '{field}': {message}", suggestion)
-            continue
+    result = prompt_with_schema(schema, dict(opts), jira=jira, abort_option=True)
+    if result == "__ABORT__":
+        info("❌ Aborted sprint/board management prompt.")
+        return None
+    return result
 
 def write_sprint_board_file(filename: str, board_name: str, sprints: list, issues: list, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
+    """
+    Write the sprint/board summary to a Markdown file using write_report for robust file writing and logging.
+    Args:
+        filename (str): Output file path.
+        board_name (str): Name of the board.
+        sprints (list): List of sprints.
+        issues (list): List of issues in the active sprint.
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+        context (dict, optional): Additional context for logging.
+    Returns:
+        None. Writes a Markdown report to disk.
+    """
     try:
         summary_section = f"**Board:** {board_name}\n\n**Total Sprints:** {len(sprints)}\n\n**Total Issues in Active Sprint:** {len(issues)}"
         details_section = "## Sprints\n"
@@ -60,20 +60,15 @@ def write_sprint_board_file(filename: str, board_name: str, sprints: list, issue
             fields = issue.get('fields', {})
             summary = fields.get('summary', 'N/A')
             details_section += f"- {key}: {summary}\n"
-        content = render_markdown_report(
-            feature="sprint_board_management",
-            user=user_email,
-            batch=batch_index,
-            suffix=unique_suffix,
-            feature_title="Sprint Board Management",
-            summary_section=summary_section,
-            main_content_section=details_section
-        )
-        with open(filename, 'w') as f:
-            f.write(content)
+        content = build_report_sections({
+            'header': f"# 🏁 Sprint/Board Summary\n\n**Board:** {board_name}",
+            'summary': summary_section,
+            'grouped_sections': details_section,
+        })
+        write_report(filename, content, context, filetype='md', feature='sprint_board_management', item_name='Sprint/Board summary report')
         info(f"🌋 Sprint/Board summary written to {filename}", extra=context, feature='sprint_board_management')
     except Exception as e:
-        error(f"Failed to write sprint board file: {e}. Check if the directory '{filename}' exists and is writable.", extra=context, feature='sprint_board_management')
+        error(REPORT_WRITE_ERROR.format(error=e), extra=context, feature='sprint_board_management')
 
 def generate_sprint_summary(sprint: Any) -> Dict[str, Any]:
     """
@@ -86,15 +81,24 @@ def generate_sprint_summary(sprint: Any) -> Dict[str, Any]:
         }
     }
 
-def sprint_board_management(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
+@feature_error_handler('sprint_board_management')
+def sprint_board_management(
+    jira: Any,
+    params: dict,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None
+) -> None:
     """
     Main feature entrypoint for managing Jira sprint boards. Handles validation, sprint actions, and report writing.
+
     Args:
         jira (Any): Authenticated Jira client instance.
         params (dict): Parameters for the sprint (board, action, etc).
         user_email (str, optional): Email of the user running the report.
         batch_index (int, optional): Batch index for batch runs.
         unique_suffix (str, optional): Unique suffix for output file naming.
+
     Returns:
         None. Writes a Markdown report to disk.
     """
@@ -138,11 +142,11 @@ def sprint_board_management(jira: Any, params: Dict[str, Any], user_email=None, 
         try:
             result = retry_or_skip(f"Managing sprint '{sprint_name}' on board '{board_name}'", do_manage)
         except Exception as e:
-            error(f"Failed to fetch board or sprint data: {e}. Please check your Jira connection, credentials, and network.", extra=context, feature='sprint_board_management')
+            error(FAILED_TO.format(action='fetch board or sprint data', error=e), extra=context, feature='sprint_board_management')
             contextual_log('error', f"[sprint_board_management] Failed to fetch board or sprint data: {e}", exc_info=True, extra=context, feature='sprint_board_management')
             return
         if not result:
-            info("🦖 See, Nobody Cares. No board or sprint data found.", extra=context, feature='sprint_board_management')
+            info(SEE_NOBODY_CARES, extra=context, feature='sprint_board_management')
             return
         board, sprint, summary = result
         filename = f"{output_dir}/sprint_board_{board_name}_{sprint_name}{unique_suffix}.md"

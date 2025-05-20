@@ -17,8 +17,9 @@ import os
 from collections import Counter, defaultdict
 from tabulate import tabulate
 from statistics import mean, stdev
-from jirassicpack.utils.io import safe_get, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
+from jirassicpack.utils.io import safe_get, prompt_text, prompt_select
 from jirassicpack.utils.logging import contextual_log
+from jirassicpack.analytics.helpers import build_report_sections
 
 LOG_FILE = 'jirassicpack.log'
 INTERVAL_CHOICES = ["hour", "day"]
@@ -187,22 +188,36 @@ def batch_run_time_analytics(logs):
     return durations, avg, min_d, max_d
 
 
-def export_markdown_analytics(analytics_type, analytics_data, export_path):
-    md = f"# 🦖 Analytics Report: {analytics_type}\n\n"
-    if isinstance(analytics_data, dict):
-        md += tabulate(analytics_data.items(), headers=["Key", "Value"], tablefmt="github")
-    elif isinstance(analytics_data, list):
-        if analytics_type.startswith("Batch run"):
-            md += tabulate(analytics_data, headers=["Correlation ID", "Successes", "Failures", "Duration (s)"] if analytics_type.startswith("Batch run success/failure") else ["Correlation ID", "Duration (s)"], tablefmt="github")
-        elif analytics_type.startswith("Top") or analytics_type.startswith("Most"):
-            md += tabulate(analytics_data, headers=["Value", "Count"], tablefmt="github")
-        else:
-            md += tabulate(analytics_data, tablefmt="github")
-    else:
-        md += str(analytics_data)
-    with open(export_path, 'w') as f:
-        f.write(md)
-    print(f"Analytics report exported as Markdown to {export_path}")
+def export_markdown(headers: List[str], rows: List[Any], analytics_type: str, export_path: str, summary: Optional[str] = None) -> None:
+    """
+    Export analytics as a Markdown file, creating directories as needed.
+    Adds summary if provided. Prints error if writing fails.
+
+    Args:
+        headers: List of column headers.
+        rows: List of data rows.
+        analytics_type: Description of the analytics/report.
+        export_path: Path to write the Markdown file.
+        summary: Optional summary string to append.
+    Output:
+        Writes a Markdown file with a table and optional summary.
+    """
+    table_md = render_table(rows, headers)
+    sections = {
+        'header': f"# 🦖 Analytics Report: {analytics_type}",
+        'summary': summary or '',
+        'grouped_sections': table_md,
+    }
+    markdown = build_report_sections(sections)
+    try:
+        dir_path = os.path.dirname(export_path)
+        if dir_path and not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+        with open(export_path, 'w') as file:
+            file.write(markdown)
+        print(f"Analytics report exported as Markdown to {export_path}")
+    except Exception as error:
+        print(f"Failed to write analytics report to {export_path}: {error}")
 
 
 def anomaly_detection(logs, interval='hour', threshold=2.0):
@@ -276,17 +291,17 @@ ANALYTICS_REGISTRY = {
     "Error rate over time": {
         "func": lambda logs, interval: list(error_rate_over_time(logs, interval=interval).items()),
         "headers": ["Time", "Error Count"],
-        "prompts": [("Interval (hour/day)", "select", INTERVAL_CHOICES, "hour")],
+        "prompts": [{"name": "Interval (hour/day)", "value": "select", "choices": INTERVAL_CHOICES, "default": "hour"}],
     },
     "Top features by error count": {
         "func": lambda logs, top_n: top_features_by_error(logs, top_n=top_n),
         "headers": ["Feature", "Error Count"],
-        "prompts": [("Show top N features (integer)", "int", None, 5)],
+        "prompts": [{"name": "Show top N features (integer)", "value": "int", "choices": None, "default": 5}],
     },
     "Most frequent error messages": {
         "func": lambda logs, top_n: most_frequent_error_messages(logs, top_n=top_n),
         "headers": ["Error Message", "Count"],
-        "prompts": [("Show top N error messages (integer)", "int", None, 5)],
+        "prompts": [{"name": "Show top N error messages (integer)", "value": "int", "choices": None, "default": 5}],
     },
     "Batch run success/failure": {
         "func": lambda logs: batch_run_success_failure(logs),
@@ -302,17 +317,17 @@ ANALYTICS_REGISTRY = {
     "Anomaly detection (error spikes)": {
         "func": lambda logs, interval, threshold: zscore_anomaly(error_rate_over_time(logs, interval=interval), threshold),
         "headers": ["Time", "Error Count", "Z-score"],
-        "prompts": [("Interval (hour/day)", "select", INTERVAL_CHOICES, "hour"), ("Z-score threshold (float)", "float", None, 2.0)],
+        "prompts": [{"name": "Interval (hour/day)", "value": "select", "choices": INTERVAL_CHOICES, "default": "hour"}, {"name": "Z-score threshold (float)", "value": "float", "choices": None, "default": 2.0}],
     },
     "Feature-based anomaly detection": {
         "func": lambda logs, threshold: zscore_anomaly(feature_error_counts(logs), threshold),
         "headers": ["Feature", "Error Count", "Z-score"],
-        "prompts": [("Z-score threshold (float)", "float", None, 2.0)],
+        "prompts": [{"name": "Z-score threshold (float)", "value": "float", "choices": None, "default": 2.0}],
     },
     "User activity analytics": {
         "func": lambda logs, top_n: user_activity_analytics(logs, top_n=top_n),
         "headers": ["User", "Total Actions", "Error Count", "Error Rate"],
-        "prompts": [("Show top N users (integer)", "int", None, 5)],
+        "prompts": [{"name": "Show top N users (integer)", "value": "int", "choices": None, "default": 5}],
     },
 }
 
@@ -402,35 +417,6 @@ def render_table(data: List[Any], headers: List[str]) -> str:
     return tabulate(data, headers=headers, tablefmt="github")
 
 
-def export_markdown(headers: List[str], rows: List[Any], analytics_type: str, export_path: str, summary: Optional[str] = None) -> None:
-    """
-    Export analytics as a Markdown file, creating directories as needed.
-    Adds summary if provided. Prints error if writing fails.
-
-    Args:
-        headers: List of column headers.
-        rows: List of data rows.
-        analytics_type: Description of the analytics/report.
-        export_path: Path to write the Markdown file.
-        summary: Optional summary string to append.
-    Output:
-        Writes a Markdown file with a table and optional summary.
-    """
-    markdown = f"# 🦖 Analytics Report: {analytics_type}\n\n"
-    markdown += render_table(rows, headers)
-    if summary:
-        markdown += f"\n\n{summary}"
-    try:
-        dir_path = os.path.dirname(export_path)
-        if dir_path and not os.path.exists(dir_path):
-            os.makedirs(dir_path)
-        with open(export_path, 'w') as file:
-            file.write(markdown)
-        print(f"Analytics report exported as Markdown to {export_path}")
-    except Exception as error:
-        print(f"Failed to write analytics report to {export_path}: {error}")
-
-
 # =========================
 # Analytics Menu (Interactive)
 # =========================
@@ -460,7 +446,7 @@ def analytics_menu(logs: List[Dict[str, Any]]) -> None:
             entry = ANALYTICS_REGISTRY[analytics_action]
             params = []
             for prompt in entry.get("prompts", []):
-                label, typ, choices, default = prompt
+                label, typ, choices, default = prompt['name'], prompt['value'], prompt.get('choices'), prompt.get('default')
                 value = safe_prompt(label, typ, choices, default)
                 params.append(value)
             result = entry["func"](logs, *params)
@@ -544,15 +530,15 @@ def log_parser(jira=None, options=None, user_email=None, batch_index=None, uniqu
             filtered_logs = filter_logs(logs, level=log_level)
         elif action == "Filter by feature/module":
             feature_names = sorted(set(safe_get(log, ['feature'], 'N/A') for log in logs))
-            selected_feature = prompt_select("Select feature:", choices=feature_names)
-            filtered_logs = filter_logs(logs, feature=selected_feature)
+            selected_feature = prompt_select("Select feature:", choices=[{"name": feature, "value": feature} for feature in feature_names])
+            filtered_logs = filter_logs(logs, feature=selected_feature["value"])
         elif action == "Filter by correlation ID":
             correlation_ids = sorted(set(safe_get(log, ['correlation_id'], 'N/A') for log in logs if safe_get(log, ['correlation_id'])))
             if not correlation_ids:
                 print("No correlation IDs found in logs.")
                 continue
-            selected_correlation_id = prompt_select("Select correlation ID:", choices=correlation_ids)
-            filtered_logs = filter_logs(logs, correlation_id=selected_correlation_id)
+            selected_correlation_id = prompt_select("Select correlation ID:", choices=[{"name": cid, "value": cid} for cid in correlation_ids])
+            filtered_logs = filter_logs(logs, correlation_id=selected_correlation_id["value"])
         elif action == "Filter by time frame":
             start_time = prompt_text("Start time (YYYY-MM-DD HH:MM:SS):", default="")
             end_time = prompt_text("End time (YYYY-MM-DD HH:MM:SS):", default="")

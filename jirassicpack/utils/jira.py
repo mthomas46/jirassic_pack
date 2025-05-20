@@ -4,26 +4,24 @@ jirassicpack.utils.jira
 All Jira API helpers, user/field/transition selectors, and interactive search utilities for the Jirassic Pack CLI. Provides robust, user-friendly selection and validation for all Jira-related CLI operations.
 """
 import questionary
-from typing import Any, Dict, Optional, Tuple, List
-import os
-from jirassicpack.utils.io import info, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, get_validated_input, select_with_pagination_and_fuzzy
-from datetime import datetime
-from jirassicpack.utils.logging import contextual_log
+from jirassicpack.utils.io import info, prompt_text, prompt_select, select_with_pagination_and_fuzzy, select_from_list
 from jirassicpack.utils.io import pretty_print_result
 from rich.table import Table
 from rich.console import Console
 from jirassicpack.utils.rich_prompt import panel_objects_in_mirror, panel_clever_girl, panel_hold_onto_your_butts
+from questionary import Choice
 
 # Module-level cache for Jira users
 _CACHED_JIRA_USERS = None
 
-def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[str] = None) -> Any:
+def select_jira_user(jira, allow_multiple=False, default_user=None):
     """
-    Select one or more Jira users via interactive prompt.
-    Returns (label, user_obj) tuple or list of such tuples if allow_multiple=True.
+    Reusable helper for selecting a Jira user via submenu:
+    - In single-user mode (allow_multiple=False): select one user and return immediately.
+    - In multi-user mode: allow selecting multiple users, return list.
+    Returns a single (label, user_obj) tuple or list of such tuples if allow_multiple=True.
     """
     global _CACHED_JIRA_USERS
-    users = []
     if _CACHED_JIRA_USERS is None:
         all_jira_users = []
         start_at = 0
@@ -40,205 +38,36 @@ def select_jira_user(jira, allow_multiple: bool = False, default_user: Optional[
     else:
         all_jira_users = _CACHED_JIRA_USERS
     filtered_users = [u for u in all_jira_users if u.get('emailAddress')]
-    user_choices = sorted([
-        (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
-        for u in filtered_users
-    ], key=lambda x: x[0])
-    if not allow_multiple:
-        while True:
-            method = prompt_select(
-                "How would you like to select the user?",
-                choices=[
-                    "Search for a user",
-                    "Fuzzy search all users (local)",
-                    "Pick from list",
-                    "Use current user",
-                    "Abort"
-                ],
-                default="Pick from list"
-            )
-            if method == "Search for a user":
-                search_term = prompt_text("Enter name or email to search:")
-                # Live query Jira for the search term
-                matches_batch = jira.search_users(query=search_term, max_results=100)
-                # Separate valid and invalid email users
-                import re
-                valid_email = lambda e: e and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e)
-                matches = [
-                    (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
-                    for u in matches_batch if valid_email(u.get('emailAddress'))
-                ]
-                matches = sorted(matches, key=lambda x: x[0])  # Sort alphabetically
-                invalids = [
-                    (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
-                    for u in matches_batch if not valid_email(u.get('emailAddress'))
-                ]
-                if not matches:
-                    info("No users found matching your search.")
-                    continue
-                if len(matches_batch) == 100:
-                    info("Warning: Only the first 100 results are shown. There may be more matching users.")
-                # Optionally show users with missing/malformed email
-                if invalids:
-                    show_invalids = prompt_select("Show users with missing or malformed email?", ["Yes", "No"], default="No")
-                    if show_invalids == "Yes":
-                        from jirassicpack.utils.rich_prompt import rich_panel
-                        user_list = "\n".join([i[0] for i in invalids])
-                        rich_panel(user_list, title="Users with Missing or Malformed Email", style="warning")
-                # Toggle to show filtered users
-                from jirassicpack.utils.rich_prompt import rich_panel
-                show_list = prompt_select("Show filtered users before selection?", ["Yes", "No"], default="No")
-                if show_list == "Yes":
-                    user_list = "\n".join([m[0] for m in matches])
-                    rich_panel(user_list, title="Filtered Users", style="info")
-                picked_label = select_with_pagination_and_fuzzy([m[0] for m in matches], message="Select a user:")
-                if not picked_label:
-                    continue
-                picked = next((m for m in matches if m[0] == picked_label), None)
-                if picked:
-                    return picked
-            elif method == "Fuzzy search all users (local)":
-                # Local fuzzy search on the full cached list
-                import re
-                valid_email = lambda e: e and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e)
-                filtered_choices = [c for c in user_choices if valid_email(c[1].get('emailAddress'))]
-                invalids = [c for c in user_choices if not valid_email(c[1].get('emailAddress'))]
-                if invalids:
-                    show_invalids = prompt_select("Show users with missing or malformed email?", ["Yes", "No"], default="No")
-                    if show_invalids == "Yes":
-                        from jirassicpack.utils.rich_prompt import rich_panel
-                        user_list = "\n".join([i[0] for i in invalids])
-                        rich_panel(user_list, title="Users with Missing or Malformed Email", style="warning")
-                show_list = prompt_select("Show filtered users before selection?", ["Yes", "No"], default="No")
-                if show_list == "Yes":
-                    from jirassicpack.utils.rich_prompt import rich_panel
-                    user_list = "\n".join([c[0] for c in filtered_choices])
-                    rich_panel(user_list, title="Filtered Users", style="info")
-                picked_label = select_with_pagination_and_fuzzy([c[0] for c in filtered_choices], message="Fuzzy search all users:")
-                if not picked_label:
-                    continue
-                picked = next((c for c in filtered_choices if c[0] == picked_label), None)
-                if picked:
-                    return picked
-            elif method == "Pick from list":
-                picked_label = select_with_pagination_and_fuzzy([c[0] for c in user_choices], message="Select a user:")
-                if not picked_label:
-                    continue
-                picked = next((c for c in user_choices if c[0] == picked_label), None)
-                if picked:
-                    return picked
-            elif method == "Use current user":
-                try:
-                    me = jira.get_current_user()
-                    current_user = (f"{me.get('displayName','?')} <{me.get('emailAddress','?')}>", me)
-                    info(f"Added current user: {current_user[0]}")
-                    return current_user
-                except Exception:
-                    info("Could not retrieve current user from Jira.")
-            elif method == "Abort":
-                info("Aborted user selection.")
-                return ('', None)
-        return ('', None)
-    while True:
-        if users:
-            info(f"Currently selected user(s):\n- " + "\n- ".join([u[0] for u in users]))
-        method = prompt_select(
-            "How would you like to select users? (multi-select mode)",
-            choices=[
-                "Search for a user",
-                "Fuzzy search all users (local)",
-                "Pick from list",
-                "Use current user",
-                "Clear selected",
-                "Done",
-                "Abort"
-            ],
-            default="Pick from list"
+    user_map = {u['accountId']: u for u in filtered_users if 'accountId' in u}
+    user_choices = [
+        {"name": f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", "value": u['accountId']} for u in filtered_users if 'accountId' in u
+    ]
+    if not user_choices:
+        info("No users found.")
+        return None if not allow_multiple else []
+    if allow_multiple:
+        picked = select_from_list(
+            user_choices,
+            message="Select Jira users (multi-select mode):",
+            multi=True
         )
-        if method == "Search for a user":
-            search_term = prompt_text("Enter name or email to search:")
-            # Live query Jira for the search term
-            matches_batch = jira.search_users(query=search_term, max_results=100)
-            import re
-            valid_email = lambda e: e and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e)
-            matches = [
-                (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
-                for u in matches_batch if valid_email(u.get('emailAddress'))
-            ]
-            matches = sorted(matches, key=lambda x: x[0])  # Sort alphabetically
-            invalids = [
-                (f"{u.get('displayName','?')} <{u.get('emailAddress','?')}>", u)
-                for u in matches_batch if not valid_email(u.get('emailAddress'))
-            ]
-            if not matches:
-                info("No users found matching your search.")
-                continue
-            if len(matches_batch) == 100:
-                info("Warning: Only the first 100 results are shown. There may be more matching users.")
-            if invalids:
-                show_invalids = prompt_select("Show users with missing or malformed email?", ["Yes", "No"], default="No")
-                if show_invalids == "Yes":
-                    from jirassicpack.utils.rich_prompt import rich_panel
-                    user_list = "\n".join([i[0] for i in invalids])
-                    rich_panel(user_list, title="Users with Missing or Malformed Email", style="warning")
-            from jirassicpack.utils.rich_prompt import rich_panel
-            show_list = prompt_select("Show filtered users before selection?", ["Yes", "No"], default="No")
-            if show_list == "Yes":
-                user_list = "\n".join([m[0] for m in matches])
-                rich_panel(user_list, title="Filtered Users", style="info")
-            picked_label = select_with_pagination_and_fuzzy([m[0] for m in matches], message="Select a user:")
-            if not picked_label:
-                continue
-            picked = next((m for m in matches if m[0] == picked_label), None)
-            if picked and picked not in users:
-                users.append(picked)
-        elif method == "Fuzzy search all users (local)":
-            import re
-            valid_email = lambda e: e and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e)
-            filtered_choices = [c for c in user_choices if valid_email(c[1].get('emailAddress'))]
-            invalids = [c for c in user_choices if not valid_email(c[1].get('emailAddress'))]
-            if invalids:
-                show_invalids = prompt_select("Show users with missing or malformed email?", ["Yes", "No"], default="No")
-                if show_invalids == "Yes":
-                    from jirassicpack.utils.rich_prompt import rich_panel
-                    user_list = "\n".join([i[0] for i in invalids])
-                    rich_panel(user_list, title="Users with Missing or Malformed Email", style="warning")
-            show_list = prompt_select("Show filtered users before selection?", ["Yes", "No"], default="No")
-            if show_list == "Yes":
-                from jirassicpack.utils.rich_prompt import rich_panel
-                user_list = "\n".join([c[0] for c in filtered_choices])
-                rich_panel(user_list, title="Filtered Users", style="info")
-            picked_label = select_with_pagination_and_fuzzy([c[0] for c in filtered_choices], message="Fuzzy search all users:")
-            if not picked_label:
-                continue
-            picked = next((c for c in filtered_choices if c[0] == picked_label), None)
-            if picked and picked not in users:
-                users.append(picked)
-        elif method == "Pick from list":
-            picked_label = select_with_pagination_and_fuzzy([c[0] for c in user_choices], message="Select a user:")
-            if not picked_label:
-                continue
-            picked = next((c for c in user_choices if c[0] == picked_label), None)
-            if picked and picked not in users:
-                users.append(picked)
-        elif method == "Use current user":
-            try:
-                me = jira.get_current_user()
-                current_user = (f"{me.get('displayName','?')} <{me.get('emailAddress','?')}>", me)
-                if current_user not in users:
-                    users.append(current_user)
-                info(f"Added current user: {current_user[0]}")
-            except Exception:
-                info("Could not retrieve current user from Jira.")
-        elif method == "Clear selected":
-            users.clear()
-            info("Cleared selected user(s).")
-        elif method == "Abort":
-            info("Aborted user selection.")
-            return []
-        else:  # Done
-            break
-    return users
+        # Extract .value if Choice objects are returned
+        if picked and isinstance(picked[0], Choice):
+            picked = [p.value for p in picked]
+        return [(user_map[val]['displayName'], user_map[val]) for val in picked] if picked else []
+    else:
+        picked = select_from_list(
+            user_choices,
+            message="Select a Jira user:",
+            multi=False
+        )
+        # Extract .value if a Choice object is returned
+        if isinstance(picked, Choice):
+            picked = picked.value
+        if picked:
+            return (user_map[picked]['displayName'], user_map[picked])
+        else:
+            return ('', None)
 
 def get_valid_project_key(jira):
     try:
@@ -249,7 +78,8 @@ def get_valid_project_key(jira):
             panel_hold_onto_your_butts()
         return result
     except Exception:
-        return get_validated_input('Enter Jira Project Key:', regex=r'^[A-Z][A-Z0-9]+$', error_msg='Invalid project key format.')
+        # Manual fallback: prompt for project key
+        return prompt_text('Enter Jira Project Key:')  # TODO: Add regex validation if needed
 
 def get_valid_issue_type(jira, project_key):
     try:
@@ -261,7 +91,7 @@ def get_valid_issue_type(jira, project_key):
             panel_clever_girl()
         return result
     except Exception:
-        return get_validated_input('Enter Issue Type:', error_msg='Invalid issue type.')
+        return prompt_text('Enter Issue Type:')  # TODO: Add validation if needed
 
 def get_valid_user(jira):
     try:
@@ -272,7 +102,7 @@ def get_valid_user(jira):
             panel_clever_girl()
         return result
     except Exception:
-        return get_validated_input('Enter user email or username:', regex=r'^[^@\s]+@[^@\s]+\.[^@\s]+$', error_msg='Invalid email format.')
+        return prompt_text('Enter user email or username:')  # TODO: Add email validation if needed
 
 def get_valid_field(jira, project_key, issue_type):
     try:
@@ -283,7 +113,7 @@ def get_valid_field(jira, project_key, issue_type):
             panel_hold_onto_your_butts()
         return result
     except Exception:
-        return get_validated_input('Enter field name:', error_msg='Invalid field name.')
+        return prompt_text('Enter field name:')  # TODO: Add validation if needed
 
 def get_valid_transition(jira, issue_key):
     try:
@@ -294,7 +124,7 @@ def get_valid_transition(jira, issue_key):
             panel_clever_girl()
         return result
     except Exception:
-        return get_validated_input('Enter transition name:', error_msg='Invalid transition.')
+        return prompt_text('Enter transition name:')  # TODO: Add validation if needed
 
 def select_account_id(jira):
     label, user_obj = select_jira_user(jira)
@@ -306,13 +136,11 @@ def select_property_key(jira, account_id):
         keys = resp.get('keys', [])
         if not keys:
             return prompt_text("Enter property key:")
-        choices = [k.get('key') for k in keys]
-        choices.append("(Enter manually)")
+        choices = [{"name": k.get('key'), "value": k.get('key')} for k in keys]
+        choices.append({"name": "(Enter manually)", "value": "__manual__"})
         result = select_with_pagination_and_fuzzy(choices, message="Select a property key:")
-        if result == "(Enter manually)":
+        if result == "__manual__":
             return prompt_text("Enter property key:")
-        if isinstance(result, str) and len(choices) > 30:
-            panel_hold_onto_your_butts()
         return result
     except Exception:
         return prompt_text("Enter property key:")
@@ -483,14 +311,14 @@ def select_board_name(jira):
         method = prompt_select(
             "How would you like to select a board?",
             choices=[
-                "Enter board name to search",
-                "Pick from list",
-                "Enter manually",
-                "Abort"
+                {"name": "Enter board name to search", "value": "search"},
+                {"name": "Pick from list", "value": "pick"},
+                {"name": "Enter manually", "value": "manual"},
+                {"name": "Abort", "value": "abort"}
             ],
-            default="Pick from list"
+            default="pick"
         )
-        if method == "Enter board name to search":
+        if method == "search":
             search_term = prompt_text("Enter board name to search:")
             if not search_term:
                 continue
@@ -499,29 +327,23 @@ def select_board_name(jira):
                 print("No boards found matching your search.")
                 continue
             boards = sorted(boards, key=lambda b: (b.get('name') or '').lower())
-            choices = [f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})" for b in boards]
+            choices = [{"name": f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})", "value": b.get('name','?')} for b in boards]
             picked = select_with_pagination_and_fuzzy(choices, message="Select a board:")
             if not picked:
                 continue
-            for b in boards:
-                label = f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})"
-                if picked == label:
-                    return b.get('name')
-        elif method == "Pick from list":
+            return picked
+        elif method == "pick":
             boards = jira.list_boards()
             if not boards:
                 print("No boards found in Jira.")
                 continue
             boards = sorted(boards, key=lambda b: (b.get('name') or '').lower())
-            choices = [f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})" for b in boards]
+            choices = [{"name": f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})", "value": b.get('name','?')} for b in boards]
             picked = select_with_pagination_and_fuzzy(choices, message="Select a board:")
             if not picked:
                 continue
-            for b in boards:
-                label = f"{b.get('name','?')} (ID: {b.get('id','?')}, Type: {b.get('type','?')})"
-                if picked == label:
-                    return b.get('name')
-        elif method == "Enter manually":
+            return picked
+        elif method == "manual":
             return prompt_text("Enter board name:")
         else:  # Abort
             return None
@@ -553,14 +375,14 @@ def select_sprint_name(jira, board_name=None, board_id=None):
         method = prompt_select(
             "How would you like to select a sprint?",
             choices=[
-                "Enter sprint name to search",
-                "Pick from list",
-                "Enter manually",
-                "Abort"
+                {"name": "Enter sprint name to search", "value": "search"},
+                {"name": "Pick from list", "value": "pick"},
+                {"name": "Enter manually", "value": "manual"},
+                {"name": "Abort", "value": "abort"}
             ],
-            default="Pick from list"
+            default="pick"
         )
-        if method == "Enter sprint name to search":
+        if method == "search":
             search_term = prompt_text("Enter sprint name to search:")
             if not search_term:
                 continue
@@ -580,15 +402,12 @@ def select_sprint_name(jira, board_name=None, board_id=None):
             if not sprints:
                 print("No sprints match your search.")
                 continue
-            choices = [f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})" for s in sprints]
+            choices = [{"name": f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})", "value": s.get('name','?')} for s in sprints]
             picked = select_with_pagination_and_fuzzy(choices, message="Select a sprint:")
             if not picked:
                 continue
-            for s in sprints:
-                label = f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})"
-                if picked == label:
-                    return s.get('name')
-        elif method == "Pick from list":
+            return picked
+        elif method == "pick":
             try:
                 sprints = jira.list_sprints(board_id)
             except requests.exceptions.HTTPError as e:
@@ -604,15 +423,12 @@ def select_sprint_name(jira, board_name=None, board_id=None):
             if not sprints:
                 print("No sprints found for this board.")
                 continue
-            choices = [f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})" for s in sprints]
+            choices = [{"name": f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})", "value": s.get('name','?')} for s in sprints]
             picked = select_with_pagination_and_fuzzy(choices, message="Select a sprint:")
             if not picked:
                 continue
-            for s in sprints:
-                label = f"{s.get('name','?')} (ID: {s.get('id','?')}, State: {s.get('state','?')})"
-                if picked == label:
-                    return s.get('name')
-        elif method == "Enter manually":
+            return picked
+        elif method == "manual":
             return prompt_text("Enter sprint name:")
         else:  # Abort
             return None

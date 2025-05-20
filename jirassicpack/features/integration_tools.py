@@ -1,10 +1,12 @@
 from typing import Any, Dict, List, Tuple
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, prompt_with_validation, safe_get, write_markdown_file, require_param, render_markdown_report, info, get_option, error, validate_required, rich_error
+from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, spinner, info_spared_no_expense, safe_get, require_param, info, error, feature_error_handler, prompt_with_schema, write_report
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 import re
 import time
 from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
-from marshmallow import fields, ValidationError
+from marshmallow import fields
+from jirassicpack.constants import SEE_NOBODY_CARES, FAILED_TO
+from jirassicpack.analytics.helpers import build_report_sections
 
 class IntegrationOptionsSchema(BaseOptionsSchema):
     integration_jql = fields.Str(required=True, error_messages={"required": "JQL is required for integration scan."}, validate=validate_nonempty)
@@ -12,63 +14,53 @@ class IntegrationOptionsSchema(BaseOptionsSchema):
 
 def prompt_integration_options(opts: dict, jira: Any = None) -> dict:
     """
-    Prompt for integration options, such as tool selection and action.
+    Prompt for integration options using Marshmallow schema for validation.
+
     Args:
-        opts (dict): Options/config dictionary.
+        opts (dict): Initial options/config dictionary.
         jira (Any, optional): Jira client for interactive selection.
+
     Returns:
-        dict: Validated options for the feature.
+        dict: Validated options for the feature, or None if aborted.
     """
     schema = IntegrationOptionsSchema()
-    while True:
-        jql = get_option(opts, 'integration_jql', prompt="🔗 JQL to find issues for integration scan:", required=True)
-        output_dir = get_option(opts, 'output_dir', default='output')
-        unique_suffix = opts.get('unique_suffix', '')
-        data = {
-            'integration_jql': jql,
-            'output_dir': output_dir,
-            'unique_suffix': unique_suffix
-        }
-        try:
-            validated = schema.load(data)
-            return validated
-        except ValidationError as err:
-            for field, msgs in err.messages.items():
-                suggestion = None
-                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
-                    message, suggestion = msgs[0]
-                elif isinstance(msgs, list) and msgs:
-                    message = msgs[0]
-                else:
-                    message = str(msgs)
-                rich_error(f"Input validation error for '{field}': {message}", suggestion)
-            continue
+    result = prompt_with_schema(schema, dict(opts), jira=jira, abort_option=True)
+    if result == "__ABORT__":
+        info("❌ Aborted integration options prompt.")
+        return None
+    return result
 
 def write_integration_links_file(filename: str, pr_links: list, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
+    """
+    Write a Markdown file for integration links using write_report for robust file writing and logging.
+    Args:
+        filename (str): Output file path.
+        pr_links (list): List of (issue, PR link) tuples.
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
+        context (dict, optional): Additional context for logging.
+    Returns:
+        None. Writes a Markdown report to disk.
+    """
     try:
         summary_section = f"**Total PR Links Found:** {len(pr_links)}"
-        details_section = ""
         if not pr_links:
             details_section = "No PR links found."
         else:
             details_section = "| Issue Key | PR Link |\n|-----------|--------|\n"
             for pr, link in pr_links:
                 details_section += f"| {pr} | {link} |\n"
-        content = render_markdown_report(
-            feature="integration_tools",
-            user=user_email,
-            batch=batch_index,
-            suffix=unique_suffix,
-            feature_title="Integration Tools",
-            summary_section=summary_section,
-            main_content_section=details_section
-        )
-        with open(filename, 'w') as f:
-            f.write(content)
-        info(f"🔗 Integration links written to {filename}", extra=context)
+        content = build_report_sections({
+            'header': f"# 🔗 Integration Links Report\n\n**Total PR Links Found:** {len(pr_links)}",
+            'summary': summary_section,
+            'grouped_sections': details_section,
+        })
+        write_report(filename, content, context, filetype='md', feature='integration_tools', item_name='Integration links report')
+        info(f"🔗 Integration links written to {filename}", extra=context, feature='integration_tools')
         contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='integration_tools')
     except Exception as e:
-        error(f"Failed to write integration links file: {e}", extra=context, feature='integration_tools')
+        error(FAILED_TO.format(action='write integration links file', error=e), extra=context, feature='integration_tools')
 
 def generate_integration_links(issues: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
     """
@@ -87,6 +79,7 @@ def generate_integration_links(issues: List[Dict[str, Any]]) -> List[Tuple[str, 
                 pr_links.append((key, match))
     return pr_links
 
+@feature_error_handler('integration_tools')
 def integration_tools(
     jira: Any,
     params: dict,
@@ -96,12 +89,14 @@ def integration_tools(
 ) -> None:
     """
     Main feature entrypoint for integration tools. Handles validation, integration actions, and report writing.
+
     Args:
         jira (Any): Authenticated Jira client instance.
         params (dict): Parameters for the integration (tool, action, etc).
         user_email (str, optional): Email of the user running the report.
         batch_index (int, optional): Batch index for batch runs.
         unique_suffix (str, optional): Unique suffix for output file naming.
+
     Returns:
         None. Writes a Markdown report to disk.
     """
@@ -122,15 +117,15 @@ def integration_tools(
         try:
             issues = retry_or_skip("Fetching issues for integration tools", do_search)
         except Exception as e:
-            error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context, feature='integration_tools')
+            error(FAILED_TO.format(action='fetch issues', error=e), extra=context, feature='integration_tools')
             contextual_log('error', f"[integration_tools] Failed to fetch issues: {e}", exc_info=True, extra=context, feature='integration_tools')
             return
         if not issues:
-            info("🦖 See, Nobody Cares. No issues found for integration links.", extra=context, feature='integration_tools')
+            info(SEE_NOBODY_CARES, extra=context, feature='integration_tools')
             return
         links = generate_integration_links(issues)
         if not links:
-            info("🦖 See, Nobody Cares. No integration links found.", extra=context, feature='integration_tools')
+            info(SEE_NOBODY_CARES, extra=context, feature='integration_tools')
             return
         filename = f"{output_dir}/integration_links{unique_suffix}.md"
         write_integration_links_file(filename, links, user_email, batch_index, unique_suffix, context)

@@ -1,7 +1,7 @@
 import os
 import yaml
 from jirassicpack.utils.logging import redact_sensitive, contextual_log
-from marshmallow import Schema, fields, ValidationError, pre_load
+from marshmallow import fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
 from jirassicpack.utils.io import get_option
 from jirassicpack.utils.fields import BaseOptionsSchema

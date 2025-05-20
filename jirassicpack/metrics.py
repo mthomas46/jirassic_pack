@@ -3,17 +3,15 @@ metrics.py
 
 Gathers and reports metrics for Jira issues, including grouping by type and summary statistics. Provides interactive prompts for user/date selection and outputs professional Markdown reports. Used for analytics and reporting features in Jirassic Pack CLI.
 """
-from datetime import datetime
 import os
-import questionary
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_required, validate_date, safe_get, write_markdown_file, require_param, render_markdown_report, make_output_filename, status_emoji
+from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_date, safe_get, require_param, make_output_filename
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
-from jirassicpack.features.time_tracking_worklogs import select_jira_user
+from jirassicpack.utils.jira import select_jira_user
 import time
 from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
-from mdutils.mdutils import MdUtils
 from typing import Any
+from jirassicpack.analytics.helpers import build_report_sections, group_issues_by_field, aggregate_issue_stats, make_summary_section, make_breakdown_section
 
 class GatherMetricsOptionsSchema(Schema):
     user = fields.Str(required=True)
@@ -35,38 +33,11 @@ def prompt_gather_metrics_options(options: dict, jira: Any = None) -> dict:
     username = None
     if jira:
         info("Please select a Jira user for metrics gathering.")
-        menu_choices = [
-            "Search for a user",
-            "Pick from list",
-            "Use current user",
-        ]
-        if config_user:
-            menu_choices.append(f"Use value from config/env: {config_user}")
-        menu_choices += ["Enter manually", "Abort"]
-        while True:
-            method = questionary.select("How would you like to select the user?", choices=menu_choices).ask()
-            if method == "Search for a user":
-                label, user_obj = select_jira_user(jira)
-                username = user_obj.get('accountId') if user_obj else None
-            elif method == "Pick from list":
-                label, user_obj = select_jira_user(jira)
-                username = user_obj.get('accountId') if user_obj else None
-            elif method == "Use current user":
-                try:
-                    me = jira.get_current_user()
-                    username = me.get('accountId')
-                except Exception:
-                    info("Could not retrieve current user from Jira.")
-                    continue
-            elif method.startswith("Use value from config/env"):
-                username = config_user
-            elif method == "Enter manually":
-                username = questionary.text("Enter Jira accountId or username:").ask()
-            elif method == "Abort":
-                info("Aborted user selection for metrics gathering.")
-                return None
-            if username:
-                break
+        label, user_obj = select_jira_user(jira, default_user=config_user)
+        username = user_obj.get('accountId') if user_obj else None
+        if not username:
+            info("Aborted user selection for metrics gathering.")
+            return None
     else:
         username = get_option(options, 'user', prompt="Jira Username for metrics:", default=config_user, required=True)
     # Start/end date: same pattern
@@ -158,71 +129,41 @@ def gather_metrics(
             error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context)
             return
         total_issues = len(issues)
-        # Order by issue key
-        issues = sorted(issues, key=lambda i: i.get('key', ''))
-        # Group by issue type
-        from collections import defaultdict
-        grouped = defaultdict(list)
-        for issue in issues:
-            itype = safe_get(issue, ['fields', 'issuetype', 'name'], 'Other')
-            grouped[itype].append(issue)
+        # Group by issue type using helper
+        grouped = group_issues_by_field(issues, ["fields", "issuetype", "name"], "Other")
+        stats = aggregate_issue_stats(issues)
         # Header section
-        lines = [
-            f"# Metrics for {display_name}",
-            f"AccountId: {account_id}",
-            f"Timeframe: {start_date} to {end_date}",
-            f"**Total issues completed:** {total_issues}",
-            "\n---\n"
-        ]
-        # Summary by type
-        lines.append("## Issue Type Breakdown\n")
+        header = f"# Metrics for {display_name}\nAccountId: {account_id}\nTimeframe: {start_date} to {end_date}\n**Total issues completed:** {total_issues}\n\n---\n"
+        # Summary section
+        summary = make_summary_section(stats)
+        # Breakdown sections
+        status_breakdown = make_breakdown_section(stats["status_counts"], "Status Breakdown")
+        type_breakdown = make_breakdown_section(stats["type_counts"], "Type Breakdown")
+        priority_breakdown = make_breakdown_section(stats["priority_counts"], "Priority Breakdown")
+        breakdowns = f"{status_breakdown}\n{type_breakdown}\n{priority_breakdown}"
+        # Top N assignees (if available)
+        # (Assignee info may not be present in all issues, so skip if not)
+        # Grouped issue sections
+        grouped_sections = ""
         for itype, group in grouped.items():
-            lines.append(f"- {itype}: {len(group)}")
-        lines.append("\n---\n")
-        # Detailed sections by type
-        for itype, group in grouped.items():
-            lines.append(f"## {itype} Issues\n")
-            lines.append("| Key | Summary | Status | Resolved |\n|-----|---------|--------|----------|\n")
+            grouped_sections += f"\n## {itype} Issues\n| Key | Summary | Status | Resolved |\n|-----|---------|--------|----------|\n"
             for issue in group:
                 key = issue.get('key', 'N/A')
-                summary = safe_get(issue, ['fields', 'summary'])
+                summary_ = safe_get(issue, ['fields', 'summary'])
                 status = safe_get(issue, ['fields', 'status', 'name'])
                 resolved = safe_get(issue, ['fields', 'resolutiondate'])
-                lines.append(f"| {key} | {summary} | {status} | {resolved} |\n")
-            lines.append("\n")
-        params_list = [("user", display_name), ("start", start_date), ("end", end_date)]
-        filename = make_output_filename("metrics", params_list, output_dir)
-        summary_section = f"**Total metrics gathered:** {total_issues}\n\n**Highlights:** ..."
-        details_section = "\n".join(lines)
-        content = render_markdown_report(
-            feature="gather_metrics",
-            user=user_email,
-            batch=batch_index,
-            suffix=unique_suffix,
-            feature_title="Metrics Gathering",
-            summary_section=summary_section,
-            main_content_section=details_section
-        )
-        md_file = MdUtils(file_name=filename, title="Metrics Report")
-        md_file.new_line(f"_Generated: {datetime.now()}_")
-        md_file.new_header(level=2, title="Summary")
-        md_file.new_line(summary_section)
-        md_file.new_header(level=2, title="Issue Type Breakdown")
-        for itype, group in grouped.items():
-            md_file.new_line(f"- {itype}: {len(group)}")
-        md_file.new_header(level=2, title="Detailed Sections by Type")
-        for itype, group in grouped.items():
-            md_file.new_header(level=3, title=itype)
-            md_file.new_line("| Key | Summary | Status | Resolved |")
-            md_file.new_line("|-----|---------|--------|----------|")
-            for issue in group:
-                key = issue.get('key', 'N/A')
-                summary = safe_get(issue, ['fields', 'summary'])
-                status = safe_get(issue, ['fields', 'status', 'name'])
-                resolved = safe_get(issue, ['fields', 'resolutiondate'])
-                md_file.new_line(f"| {key} | {summary} | {status} | {resolved} |")
-            md_file.new_line("")
-        md_file.create_md_file()
+                grouped_sections += f"| {key} | {summary_} | {status} | {resolved} |\n"
+            grouped_sections += "\n"
+        # Compose final report using build_report_sections
+        sections = {
+            'header': header,
+            'summary': summary,
+            'breakdowns': breakdowns,
+            'grouped_sections': grouped_sections,
+        }
+        filename = make_output_filename("metrics", [("user", display_name), ("start", start_date), ("end", end_date)], output_dir)
+        content = build_report_sections(sections)
+        write_report(filename, content, context, filetype='md', feature='gather_metrics', item_name='Metrics report')
         info(f"🦖 Metrics report written to {filename}")
         duration = int((time.time() - context.get('start_time', 0)) * 1000) if context.get('start_time') else None
         contextual_log('info', f"📈 [Gather Metrics] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}).", operation="feature_end", status="success", params=redact_sensitive(params), extra=context, feature='gather_metrics')

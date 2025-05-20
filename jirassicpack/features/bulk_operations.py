@@ -3,259 +3,164 @@
 # It prompts the user for the desired action, the JQL to select issues, and the value for the action (if needed).
 # Results are written to a Markdown report for traceability.
 
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, info_spared_no_expense, prompt_with_validation, info, validate_required, error, render_markdown_report, get_option, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path, status_emoji
+from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, spinner, progress_bar, info_spared_no_expense, info, error, prompt_select, feature_error_handler, make_output_filename, prompt_with_schema, write_report
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
-from jirassicpack.utils.jira import select_jira_user, get_valid_transition
-from typing import Any, Dict, List, Tuple
-import json
+from typing import Any
 import time
-from marshmallow import Schema, fields, ValidationError, validate
-from jirassicpack.utils.rich_prompt import rich_error
+from marshmallow import fields, validate
 from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
-from mdutils.mdutils import MdUtils
-from datetime import datetime
+from jirassicpack.analytics.helpers import build_report_sections
+from jirassicpack.constants import SEE_NOBODY_CARES, BULK_OPERATION_CANCELLED
 
-def prompt_bulk_options(opts: Dict[str, Any], jira: Any = None) -> Dict[str, Any]:
+def prompt_bulk_options(opts: dict, jira: Any = None) -> dict:
     """
-    Prompt for bulk operation options using Jira-aware helpers for value selection.
+    Prompt for bulk operation options using Marshmallow schema for validation and Jira-aware helpers.
+
     Args:
-        opts (Dict[str, Any]): Options/config dictionary.
+        opts (dict): Initial options/config dictionary.
         jira (Any, optional): Jira client for interactive selection.
+
     Returns:
-        Dict[str, Any]: Validated options for the feature.
+        dict: Validated options for the feature, or None if aborted.
     """
     schema = BulkOptionsSchema()
-    while True:
-        act = get_option(opts, 'action', prompt="🦴 Bulk action:", choices=BULK_ACTIONS)
-        jql = get_option(opts, 'jql', prompt="🦴 JQL for selecting issues:")
-        val = opts.get('value', '')
-        if not val and jira and act == 'transition':
-            key = opts.get('issue_key') or get_option(opts, 'issue_key', prompt="🦴 Issue Key for transition:")
-            val = get_valid_transition(jira, key)
-        elif not val and jira and act == 'assign':
-            info("Please select a Jira user to assign issues to.")
-            label, user_obj = select_jira_user(jira)
-            val = user_obj.get('accountId') if user_obj else ''
-            if not val:
-                info("Aborted user selection for assignment.")
-                return None
-        elif not val:
-            val = get_option(opts, 'value', prompt="🦴 Value for action (if applicable):", default='')
-        out_dir = get_option(opts, 'output_dir', default='output')
-        suffix = opts.get('unique_suffix', '')
-        data = {
-            'action': act,
-            'jql': jql,
-            'value': val,
-            'output_dir': out_dir,
-            'unique_suffix': suffix
-        }
-        try:
-            validated = schema.load(data)
-            return validated
-        except ValidationError as err:
-            for field, msgs in err.messages.items():
-                suggestion = None
-                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
-                    message, suggestion = msgs[0]
-                elif isinstance(msgs, list) and msgs:
-                    message = msgs[0]
-                else:
-                    message = str(msgs)
-                rich_error(f"Input validation error for '{field}': {message}", suggestion)
-            continue
+    result = prompt_with_schema(schema, dict(opts), jira=jira, abort_option=True)
+    if result == "__ABORT__":
+        info("❌ Aborted bulk operation prompt.")
+        return None
+    return result
 
-def write_bulk_report(
-    filename: str,
-    action: str,
-    results: list,
+@feature_error_handler('bulk_operations')
+def bulk_operations(
+    jira: Any,
+    params: dict,
     user_email: str = None,
     batch_index: int = None,
-    unique_suffix: str = None,
-    context: dict = None,
-    summary: list = None
+    unique_suffix: str = None
 ) -> None:
     """
-    Write a Markdown report for bulk operations, including action summary and details for each issue.
-    Args:
-        filename (str): Output file path.
-        action (str): Bulk action performed.
-        results (list): List of results or issues.
-        user_email (str, optional): Email of the user running the report.
-        batch_index (int, optional): Batch index for batch runs.
-        unique_suffix (str, optional): Unique suffix for output file naming.
-        context (dict, optional): Additional context for logging.
-        summary (list, optional): Summary data for the report.
-    Returns:
-        None. Writes a Markdown report to disk.
-    """
-    try:
-        output_path = f"{filename}"
-        md_file = MdUtils(file_name=output_path, title="Bulk Operations Report")
-        md_file.new_line(f"_Generated: {datetime.now()}_")
-        md_file.new_header(level=2, title="Summary")
-        summary_section = f"**Bulk Action:** {action}\n\n**Total Issues:** {len(results)}"
-        details_section = "| Issue Key | Status | Error Message |\n|-----------|--------|--------------|\n"
-        if summary:
-            for key, status, err in summary:
-                details_section += f"| {key} | {status} | {err} |\n"
-        else:
-            for r in results:
-                details_section += f"| {r} |  |  |\n"
-        md_file.new_line(summary_section)
-        md_file.new_line(details_section)
-        md_file.create_md_file()
-        info(f"🦖 Bulk operations report written to {output_path}")
-    except Exception as e:
-        error(f"Failed to write bulk operation report: {e}", extra=context, feature='bulk_operations')
+    Main feature entrypoint for bulk operations on Jira issues (transition, comment, assign).
 
-def write_bulk_report_json(
-    filename: str,
-    action: str,
-    summary: list,
-    user_email: str = None,
-    batch_index: int = None,
-    unique_suffix: str = None,
-    context: dict = None
-) -> None:
-    """
-    Write a JSON file for bulk operation results.
-    Args:
-        filename (str): Output file path.
-        action (str): Bulk action performed.
-        summary (list): Summary data for the report.
-        user_email (str, optional): Email of the user running the report.
-        batch_index (int, optional): Batch index for batch runs.
-        unique_suffix (str, optional): Unique suffix for output file naming.
-        context (dict, optional): Additional context for logging.
-    Returns:
-        None. Writes a JSON file to disk.
-    """
-    try:
-        data = {
-            "action": action,
-            "results": [
-                {"key": key, "status": status, "error": err} for key, status, err in summary
-            ]
-        }
-        with open(filename, 'w') as f:
-            json.dump(data, f, indent=2)
-        contextual_log('info', f"🦴 Bulk operation JSON report written to {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='bulk_operations')
-    except Exception as e:
-        error(f"Failed to write bulk operation JSON file: {e}", extra=context, feature='bulk_operations')
-
-def bulk_operations(jira: Any, params: Dict[str, Any], user_email: str = None, batch_index: int = None, unique_suffix: str = None) -> None:
-    """
-    Main feature entrypoint for performing bulk operations on Jira issues. Handles validation, execution, and report writing.
     Args:
         jira (Any): Authenticated Jira client instance.
-        params (Dict[str, Any]): Parameters for the operation (action, jql, value, etc).
+        params (dict): Parameters for the bulk operation.
         user_email (str, optional): Email of the user running the report.
         batch_index (int, optional): Batch index for batch runs.
         unique_suffix (str, optional): Unique suffix for output file naming.
+
     Returns:
         None. Writes Markdown and JSON reports to disk.
     """
     correlation_id = params.get('correlation_id')
     context = build_context("bulk_operations", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()
-    try:
-        contextual_log('info', f"🦴 [Bulk Operations] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='bulk_operations')
-        # Patch JiraClient for logging
-        orig_create_issue = getattr(jira, 'create_issue', None)
-        orig_update_issue = getattr(jira, 'update_issue', None)
-        if orig_create_issue:
-            def log_create_issue(*args, **kwargs):
-                contextual_log('debug', f"🦴 [Bulk Operations] Jira create_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
-                resp = orig_create_issue(*args, **kwargs)
-                contextual_log('debug', f"🦴 [Bulk Operations] Jira create_issue response: {redact_sensitive(resp)}", extra=context, feature='bulk_operations')
-                return resp
-            jira.create_issue = log_create_issue
-        if orig_update_issue:
-            def log_update_issue(*args, **kwargs):
-                contextual_log('debug', f"🦴 [Bulk Operations] Jira update_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
-                resp = orig_update_issue(*args, **kwargs)
-                contextual_log('debug', f"🦴 [Bulk Operations] Jira update_issue response: {redact_sensitive(resp)}", extra=context, feature='bulk_operations')
-                return resp
-            jira.update_issue = log_update_issue
-        action = params.get('action')
-        if not action:
-            error("action is required.", extra=context, feature='bulk_operations')
-            contextual_log('error', "🦴 [Bulk Operations] Action is required but missing.", operation="validation", status="error", extra=context, feature='bulk_operations')
-            return
-        jql = params.get('jql')
-        if not jql:
-            error("jql is required.", extra=context, feature='bulk_operations')
-            contextual_log('error', "🦴 [Bulk Operations] JQL is required but missing.", operation="validation", status="error", extra=context, feature='bulk_operations')
-            return
-        value = params.get('value', '')
-        output_dir = params.get('output_dir', 'output')
-        unique_suffix = params.get('unique_suffix', '')
-        ensure_output_dir(output_dir)
-        # Confirmation prompt before proceeding
-        confirm = prompt_select(
-            "Are you sure you want to proceed? This could affect many issues.\n🦖 God help us, we're in the hands of devs.",
-            choices=["Yes, proceed", "Cancel"]
-        )
-        if confirm != "Yes, proceed":
-            info("🦖 Bulk operation cancelled by user.", extra=context, feature='bulk_operations')
-            return
-        def do_search():
-            with spinner("🦴 Running Bulk Operations..."):
-                return jira.search_issues(jql, fields=["key"], max_results=100)
-        issues = retry_or_skip("Fetching issues for bulk operation", do_search)
-        if not issues:
-            info("🦖 See, Nobody Cares. No issues matched your criteria.", extra=context, feature='bulk_operations')
-            return
-        results = []
-        summary = []
-        for issue in progress_bar(issues, desc=f"🦴 Bulk: {action}"):
-            key = issue.get('key', 'N/A')
-            def do_action():
-                with spinner(f"🦴 Running Bulk {action} for {key}..."):
-                    if action == 'transition':
-                        jira.transition_issue(key, value)
-                        return f"{key}: transitioned to {value}"
-                    elif action == 'comment':
-                        jira.add_comment(key, value)
-                        return f"{key}: commented '{value}'"
-                    elif action == 'assign':
-                        jira.assign_issue(key, value)
-                        return f"{key}: assigned to {value}"
-                    else:
-                        return f"{key}: unknown action '{action}'"
-            try:
-                result = retry_or_skip(f"🦴 Bulk {action} for {key}", do_action)
-                if result:
-                    results.append(result)
-                    summary.append((key, "Success", ""))
+    contextual_log('info', f"🦴 [Bulk Operations] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='bulk_operations')
+    # Patch JiraClient for logging
+    orig_create_issue = getattr(jira, 'create_issue', None)
+    orig_update_issue = getattr(jira, 'update_issue', None)
+    if orig_create_issue:
+        def log_create_issue(*args, **kwargs):
+            contextual_log('debug', f"🦴 [Bulk Operations] Jira create_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
+            resp = orig_create_issue(*args, **kwargs)
+            contextual_log('debug', f"🦴 [Bulk Operations] Jira create_issue response: {redact_sensitive(resp)}", extra=context, feature='bulk_operations')
+            return resp
+        jira.create_issue = log_create_issue
+    if orig_update_issue:
+        def log_update_issue(*args, **kwargs):
+            contextual_log('debug', f"🦴 [Bulk Operations] Jira update_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
+            resp = orig_update_issue(*args, **kwargs)
+            contextual_log('debug', f"🦴 [Bulk Operations] Jira update_issue response: {redact_sensitive(resp)}", extra=context, feature='bulk_operations')
+            return resp
+        jira.update_issue = log_update_issue
+    action = params.get('action')
+    if not action:
+        error("action is required.", extra=context, feature='bulk_operations')
+        contextual_log('error', "🦴 [Bulk Operations] Action is required but missing.", operation="validation", status="error", extra=context, feature='bulk_operations')
+        return
+    jql = params.get('jql')
+    if not jql:
+        error("jql is required.", extra=context, feature='bulk_operations')
+        contextual_log('error', "🦴 [Bulk Operations] JQL is required but missing.", operation="validation", status="error", extra=context, feature='bulk_operations')
+        return
+    value = params.get('value', '')
+    output_dir = params.get('output_dir', 'output')
+    unique_suffix = params.get('unique_suffix', '')
+    ensure_output_dir(output_dir)
+    confirm = prompt_select(
+        "Are you sure you want to proceed? This could affect many issues.\n🦖 God help us, we're in the hands of devs.",
+        choices=["Yes, proceed", "Cancel"]
+    )
+    if confirm != "Yes, proceed":
+        info(BULK_OPERATION_CANCELLED, extra=context, feature='bulk_operations')
+        return
+    def do_search():
+        with spinner("🦴 Running Bulk Operations..."):
+            return jira.search_issues(jql, fields=["key"], max_results=100)
+    issues = retry_or_skip("Fetching issues for bulk operation", do_search)
+    if not issues:
+        info(SEE_NOBODY_CARES, extra=context, feature='bulk_operations')
+        return
+    results = []
+    summary = []
+    for issue in progress_bar(issues, desc=f"🦴 Bulk: {action}"):
+        key = issue.get('key', 'N/A')
+        def do_action():
+            with spinner(f"🦴 Running Bulk {action} for {key}..."):
+                if action == 'transition':
+                    jira.transition_issue(key, value)
+                    return f"{key}: transitioned to {value}"
+                elif action == 'comment':
+                    jira.add_comment(key, value)
+                    return f"{key}: commented '{value}'"
+                elif action == 'assign':
+                    jira.assign_issue(key, value)
+                    return f"{key}: assigned to {value}"
                 else:
-                    results.append(f"{key}: skipped")
-                    summary.append((key, "Skipped", ""))
-            except Exception as e:
-                results.append(f"{key}: failed - {e}")
-                summary.append((key, "Failed", str(e)))
-        filename = f"{output_dir}/bulk_operation_{action}{unique_suffix}.md"
-        write_bulk_report(filename, action, results, user_email, batch_index, unique_suffix, context=context, summary=summary)
-        json_filename = f"{output_dir}/bulk_operation_{action}{unique_suffix}.json"
-        write_bulk_report_json(json_filename, action, summary, user_email, batch_index, unique_suffix, context=context)
-        celebrate_success()
-        info_spared_no_expense()
-        info("\nBatch Summary:", extra=context, feature='bulk_operations')
-        info("Feature         | Status   | Error Message", extra=context, feature='bulk_operations')
-        info("----------------|----------|--------------", extra=context, feature='bulk_operations')
+                    return f"{key}: unknown action '{action}'"
+        try:
+            result = retry_or_skip(f"🦴 Bulk {action} for {key}", do_action)
+            if result:
+                results.append(result)
+                summary.append((key, "Success", ""))
+            else:
+                results.append(f"{key}: skipped")
+                summary.append((key, "Skipped", ""))
+        except Exception as e:
+            results.append(f"{key}: failed - {e}")
+            summary.append((key, "Failed", str(e)))
+    params_list = [("action", action), ("jql", jql)]
+    filename = make_output_filename("bulk_operations", params_list, output_dir)
+    # Compose Markdown report content
+    summary_section = f"**Bulk Action:** {action}\n\n**Total Issues:** {len(results)}"
+    details_section = "| Issue Key | Status | Error Message |\n|-----------|--------|--------------|\n"
+    if summary:
         for key, status, err in summary:
-            info(f"{key:<15} | {status:<8} | {err}", extra=context, feature='bulk_operations')
-        info(f"🦴 Bulk operation report written to {filename}", extra=context, feature='bulk_operations')
-        duration = int((time.time() - start_time) * 1000)
-        contextual_log('info', f"🦴 [Bulk Operations] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}). Duration: {duration}ms.", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='bulk_operations')
-    except KeyboardInterrupt:
-        contextual_log('warning', "[bulk_operations] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", extra=context, feature='bulk_operations')
-        info("Graceful exit from Bulk Operations feature.", extra=context, feature='bulk_operations')
-    except Exception as e:
-        contextual_log('error', f"🦴 [Bulk Operations] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", extra=context, feature='bulk_operations')
-        error(f"🦴 [Bulk Operations] Exception: {e}", extra=context, feature='bulk_operations')
-        raise 
+            details_section += f"| {key} | {status} | {err} |\n"
+    else:
+        for r in results:
+            details_section += f"| {r} |  |  |\n"
+    report = build_report_sections({
+        'header': header,
+        'summary': summary_section,
+        'action_items': action_items,
+        'grouped_sections': details_section,
+    })
+    write_report(filename, report, context, filetype='md', feature='bulk_operations', item_name='Bulk operation report')
+    contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='bulk_operations')
+    json_filename = make_output_filename("bulk_operations", params_list, output_dir, ext="json")
+    json_data = {
+        "action": action,
+        "results": [
+            {"key": key, "status": status, "error": err} for key, status, err in summary
+        ] if summary else []
+    }
+    write_report(json_filename, json_data, context, filetype='json', feature='bulk_operations', item_name='Bulk operation JSON report')
+    contextual_log('info', f"JSON file written: {json_filename}", operation="output_write", output_file=json_filename, status="success", extra=context, feature='bulk_operations')
+    celebrate_success()
+    info_spared_no_expense()
+    info(f"🦴 Bulk operation report written to {filename}", extra=context, feature='bulk_operations')
+    duration = int((time.time() - start_time) * 1000)
+    contextual_log('info', f"🦴 [Bulk Operations] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}). Duration: {duration}ms.", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='bulk_operations')
 
 class BulkOptionsSchema(BaseOptionsSchema):
     action = fields.Str(required=True, validate=validate.OneOf(['transition', 'comment', 'assign']), error_messages={"required": "Action is required."})

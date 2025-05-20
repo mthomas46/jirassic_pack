@@ -4,7 +4,7 @@ jirassicpack.utils.fields
 Custom Marshmallow fields and validators for Jira CLI schemas. Provides reusable field types, normalization, and validation utilities for robust schema-driven CLI input.
 """
 import re
-from marshmallow import fields, ValidationError, Schema, pre_load, validates, validate
+from marshmallow import fields, ValidationError, Schema, pre_load
 import datetime
 
 class IssueKeyField(fields.Str):

@@ -3,21 +3,16 @@
 # It prompts for user, start/end dates, fetches completed issues, and outputs a Markdown report with a metrics table.
 
 from datetime import datetime
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, info, write_markdown_file, make_output_filename, render_markdown_report_template, status_emoji
+from jirassicpack.utils.io import ensure_output_dir, spinner, info, make_output_filename, feature_error_handler, safe_get, validate_date, error, require_param, prompt_with_schema, write_report
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
-from jirassicpack.utils.jira import select_jira_user
-from jirassicpack.utils.io import get_option, validate_required, validate_date, error, safe_get, require_param, render_markdown_report
-from typing import Any, Dict, List, Tuple
-from statistics import mean, median
-from collections import defaultdict, Counter
+from typing import Any
+from collections import defaultdict
 import logging
 import time
-import questionary
-from marshmallow import Schema, fields, ValidationError, pre_load
-from jirassicpack.utils.rich_prompt import rich_error
+from marshmallow import fields, pre_load
 from jirassicpack.utils.fields import BaseOptionsSchema, validate_nonempty
-from jirassicpack.config import ConfigLoader
-from mdutils.mdutils import MdUtils
+from jirassicpack.analytics.helpers import aggregate_issue_stats, make_summary_section, make_breakdown_section, make_reporter_section, build_report_sections
+from jirassicpack.constants import SEE_NOBODY_CARES, FAILED_TO
 
 logger = logging.getLogger(__name__)
 
@@ -35,58 +30,24 @@ class AdvancedMetricsOptionsSchema(BaseOptionsSchema):
                 data[k] = v.strip()
         return data
 
-def prompt_advanced_metrics_options(options: Dict[str, Any], jira: Any = None) -> Dict[str, Any]:
+def prompt_advanced_metrics_options(options: dict, jira: Any = None) -> dict:
     """
     Prompt for advanced metrics options using Marshmallow schema for validation and normalization.
-    Prompts for user, start/end dates, and output directory.
-    Returns a validated dictionary of all options needed for advanced metrics.
+
     Args:
-        options (Dict[str, Any]): Options/config dictionary.
+        options (dict): Initial options/config dictionary.
         jira (Any, optional): Jira client for interactive selection.
+
     Returns:
-        Dict[str, Any]: Validated options for the feature.
+        dict: Validated options for the feature.
     """
     schema = AdvancedMetricsOptionsSchema()
-    data = dict(options)
-    while True:
-        try:
-            validated = schema.load(data)
-            # Validate date fields using validate_date utility
-            try:
-                validate_date(validated['start_date'])
-            except Exception:
-                data['start_date'] = get_option(data, 'start_date', prompt="🦖 Start date (YYYY-MM-DD):", required=True, validate=validate_date)
-                continue
-            try:
-                validate_date(validated['end_date'])
-            except Exception:
-                data['end_date'] = get_option(data, 'end_date', prompt="🦖 End date (YYYY-MM-DD):", required=True, validate=validate_date)
-                continue
-            return validated
-        except ValidationError as err:
-            for field, msgs in err.messages.items():
-                suggestion = None
-                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
-                    message, suggestion = msgs[0]
-                elif isinstance(msgs, list) and msgs:
-                    message = msgs[0]
-                else:
-                    message = str(msgs)
-                if field == 'user' and jira:
-                    info("Please select a Jira user for advanced metrics.")
-                    user = select_jira_user(jira)
-                    if not user:
-                        info("Aborted user selection for advanced metrics.")
-                        return None
-                    data['user'] = user
-                else:
-                    data[field] = get_option(data, field, prompt=f"🦖 {field.replace('_', ' ').title()}: ", required=True)
-                rich_error(f"Input validation error for '{field}': {message}", suggestion)
-            continue
+    return prompt_with_schema(schema, dict(options), jira=jira)
 
+@feature_error_handler('advanced_metrics')
 def advanced_metrics(
     jira: Any,
-    params: Dict[str, Any],
+    params: dict,
     user_email: str = None,
     batch_index: int = None,
     unique_suffix: str = None
@@ -97,10 +58,11 @@ def advanced_metrics(
 
     Args:
         jira (Any): Authenticated Jira client instance.
-        params (Dict[str, Any]): Parameters for the report (dates, filters, etc).
+        params (dict): Parameters for the report (dates, filters, etc).
         user_email (str, optional): Email of the user running the report.
         batch_index (int, optional): Batch index for batch runs.
         unique_suffix (str, optional): Unique suffix for output file naming.
+
     Returns:
         None. Writes a Markdown report to disk.
     """
@@ -134,11 +96,11 @@ def advanced_metrics(
                 issues = jira.search_issues(jql, fields=fields, max_results=200, context=context)
         except Exception as e:
             contextual_log('error', f"📊 [Advanced Metrics] Failed to fetch issues: {e}", exc_info=True, operation="api_call", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
-            error(f"Failed to fetch issues: {e}. Please check your Jira connection, credentials, and network.", extra=context, feature='advanced_metrics')
+            error(FAILED_TO.format(action='fetch issues', error=e), extra=context, feature='advanced_metrics')
             return
         if not issues:
-            info("🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='advanced_metrics')
-            contextual_log('info', "🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='advanced_metrics')
+            info(SEE_NOBODY_CARES, extra=context, feature='advanced_metrics')
+            contextual_log('info', SEE_NOBODY_CARES, extra=context, feature='advanced_metrics')
             return
         # Try to get display name/accountId for header
         display_name = user
@@ -162,105 +124,41 @@ def advanced_metrics(
             grouped[itype].append(issue)
         # Try to get project category from first issue
         project_category = safe_get(issues[0], ['fields', 'project', 'projectCategory', 'name'], 'N/A') if issues else 'N/A'
-        # Report header
-        header = f"# 📊 Advanced Metrics Report\n\n"
-        header += f"**Feature:** Advanced Metrics  "
-        header += f"**User:** {display_name} ({account_id})  "
-        header += f"**Time range:** {start_date} to {end_date}  "
-        header += f"**Project Category:** {project_category}  "
-        header += f"**Run at:** {run_at}  "
-        header += "\n\n---\n\n"
-        # Report summary table
-        summary_table = "| Metric | Value |\n|---|---|\n"
-        summary_table += f"| Total Issues | {len(issues)} |\n"
-        for itype, group in grouped.items():
-            summary_table += f"| {itype} | {len(group)} |\n"
-        summary_table += "\n---\n\n"
-        # Build table of contents
-        toc = "## Table of Contents\n"
-        for itype in grouped:
-            anchor = itype.lower().replace(' ', '-')
-            toc += f"- [{itype} Issues](#{anchor}-issues)\n"
-        toc += "\n"
-        # Action items: unresolved, overdue, blocked
-        action_items = "## Action Items\n"
-        overdue = [i for group in grouped.values() for i in group if safe_get(i, ['fields', 'status', 'name'], '').lower() not in ['done', 'closed'] and safe_get(i, ['fields', 'duedate']) and safe_get(i, ['fields', 'duedate']) < datetime.now().strftime('%Y-%m-%d')]
-        if overdue:
-            action_items += "### Overdue Issues\n"
-            for issue in overdue:
-                key = issue.get('key', '')
-                summary = safe_get(issue, ['fields', 'summary'], '')[:40]
-                due = safe_get(issue, ['fields', 'duedate'], '')
-                action_items += f"- 🔴 [{key}] {summary} (Due: {due})\n"
-        else:
-            action_items += "No overdue issues!\n"
-        # Visual enhancements: status emoji
-        # Top N lists
-        assignees = [safe_get(i, ['fields', 'assignee', 'displayName'], '') for group in grouped.values() for i in group]
-        top_assignees = Counter(assignees).most_common(5)
-        top_n_lists = "## Top 5 Assignees\n"
-        for name, count in top_assignees:
-            if name:
-                top_n_lists += f"- {name}: {count} issues\n"
-        # Related links
-        related_links = "## Related Links\n"
-        related_links += f"- [Project Dashboard]({base_url}/projects)\n"
-        # Export metadata
-        export_metadata = f"---\n**Report generated by:** {user_email}  \n**Run at:** {run_at}  \n**Filters:** User: {display_name}, Time: {start_date} to {end_date}\n"
-        # Glossary
-        glossary = "## Glossary\n- ✅ Done/Closed/Resolved\n- 🟡 In Progress/In Review/Doing\n- 🔴 Blocked/On Hold/Overdue\n- ⬜️ Other statuses\n"
-        # Next steps
-        next_steps = "## Next Steps\n"
-        if overdue:
-            next_steps += "- Review and resolve overdue issues.\n"
-        if not top_assignees or (top_assignees and top_assignees[0][1] < 3):
-            next_steps += "- Consider rebalancing workload among assignees.\n"
+        # Aggregate stats
+        stats = aggregate_issue_stats(issues)
+        # Header
+        header = f"# 📊 Advanced Metrics Report\n**User:** {display_name}  **Timeframe:** {start_date} to {end_date}  **Total issues:** {len(issues)}\n\n---\n"
+        # Summary
+        summary = make_summary_section(stats)
+        # Breakdowns
+        status_breakdown = make_breakdown_section(stats["status_counts"], "Status Breakdown")
+        type_breakdown = make_breakdown_section(stats["type_counts"], "Type Breakdown")
+        priority_breakdown = make_breakdown_section(stats["priority_counts"], "Priority Breakdown")
+        breakdowns = f"{status_breakdown}\n{type_breakdown}\n{priority_breakdown}"
+        # Top N reporters
+        top_reporters = make_reporter_section(stats["reporters"], "Top Reporters")
         # Grouped issue sections
         grouped_sections = ""
         for itype, group in grouped.items():
-            anchor = itype.lower().replace(' ', '-')
-            grouped_sections += f"\n## {itype} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
-            grouped_sections += "| Key | Summary | Status | Assignee | Components | Project Category | Created | Updated | Age (days) | Link |\n"
-            grouped_sections += "|---|---|---|---|---|---|---|---|---|---|\n"
+            grouped_sections += f"\n## {itype} Issues\n| Key | Summary | Status | Resolved |\n|---|---|---|---|\n"
             for issue in group:
-                key = issue.get('key', '')
-                summary = safe_get(issue, ['fields', 'summary'], '')[:40]
+                key = issue.get('key', 'N/A')
+                summary_ = safe_get(issue, ['fields', 'summary'], '')
                 status = safe_get(issue, ['fields', 'status', 'name'], '')
-                emoji = status_emoji(status)
-                assignee = safe_get(issue, ['fields', 'assignee', 'displayName'], '')
-                components = ', '.join([c['name'] for c in issue.get('fields', {}).get('components', [])])
-                proj_cat = safe_get(issue, ['fields', 'project', 'projectCategory', 'name'], project_category)
-                created = safe_get(issue, ['fields', 'created'], '')
-                updated = safe_get(issue, ['fields', 'updated'], '')
-                age = ''
-                try:
-                    if created:
-                        age = (datetime.now() - datetime.strptime(created[:10], '%Y-%m-%d')).days
-                except Exception:
-                    age = ''
-                link = f"[{key}]({base_url}/browse/{key})"
-                grouped_sections += f"| {key} | {summary} | {emoji} {status} | {assignee} | {components} | {proj_cat} | {created} | {updated} | {age} | {link} |\n"
+                resolved = safe_get(issue, ['fields', 'resolutiondate'], '')
+                grouped_sections += f"| {key} | {summary_} | {status} | {resolved} |\n"
             grouped_sections += "\n"
-        # Compose final report
-        report = render_markdown_report_template(
-            report_header=header,
-            table_of_contents=toc,
-            report_summary=summary_table,
-            action_items=action_items,
-            top_n_lists=top_n_lists,
-            related_links=related_links,
-            grouped_issue_sections=grouped_sections,
-            export_metadata=export_metadata,
-            glossary=glossary,
-            next_steps=next_steps
-        )
-        # Write to file
+        # Compose final report using build_report_sections
+        sections = {
+            'header': header,
+            'summary': summary,
+            'breakdowns': breakdowns,
+            'top_n': top_reporters,
+            'grouped_sections': grouped_sections,
+        }
         filename = make_output_filename(output_dir, f"advanced_metrics_{user_email}_{start_date}_{end_date}_{unique_suffix}")
-        md_file = MdUtils(file_name=filename, title="Advanced Metrics Report")
-        md_file.new_line(f"_Generated: {datetime.now()}_")
-        md_file.new_header(level=2, title="Summary")
-        md_file.new_line(report)
-        md_file.create_md_file()
+        content = build_report_sections(sections)
+        write_report(filename, content)
         info(f"🦖 Advanced metrics report written to {filename}")
         # Enhanced feature end log
         duration = int((time.time() - start_time) * 1000)
@@ -270,8 +168,8 @@ def advanced_metrics(
         info("Graceful exit from Advanced Metrics feature.", extra=context, feature='advanced_metrics')
     except Exception as e:
         if 'list index out of range' in str(e):
-            info("🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='advanced_metrics')
-            contextual_log('info', "🦖 See, Nobody Cares. No issues found for the given parameters.", extra=context, feature='advanced_metrics')
+            info(SEE_NOBODY_CARES, extra=context, feature='advanced_metrics')
+            contextual_log('info', SEE_NOBODY_CARES, extra=context, feature='advanced_metrics')
             return
         contextual_log('error', f"[advanced_metrics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='advanced_metrics')
         error(f"[advanced_metrics] Exception: {e}", extra=context, feature='advanced_metrics')

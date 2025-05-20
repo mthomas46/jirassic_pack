@@ -277,4 +277,83 @@ def my_feature(jira, options, user_email=None, batch_index=None, unique_suffix=N
   - Expected: Error log and user message: `[ERROR] [my_feature] 'start_date' is invalid.`
 - **Network Failure:**
   - Simulate by disconnecting network or mocking API error.
-  - Expected: Error log with traceback, user prompted to retry or skip. 
+  - Expected: Error log with traceback, user prompted to retry or skip.
+
+## Logging, Error Handling, and Configuration Standards
+
+### Feature Entrypoints
+- All feature entrypoints must use the `@feature_error_handler('feature_name')` decorator.
+- Do not use redundant try/except blocks for error handling in the main entrypoint; the decorator will handle errors and logging.
+
+### Logging
+- Use `contextual_log` for all structured logs, including feature, user, batch, and suffix context.
+- Use the `info()` and `error()` utilities from `jirassicpack.utils.io`, which automatically log to both the console and the structured log.
+- Avoid direct use of `print()` for logging; use the provided logging utilities.
+
+### Configuration
+- All features must use the options dictionary (from `ConfigLoader().get_options(feature_name)`) for configuration.
+- Do not access environment variables or config files directly in feature modules.
+
+### Utilities
+- Utility functions should use `contextual_log` for any logging.
+- Follow the same logging and error handling patterns as features where applicable.
+
+---
+
+## Prompting and Validation Best Practices
+
+### Using `prompt_with_schema`
+All new feature prompt functions should use the shared `prompt_with_schema` utility for Marshmallow schema-based prompting and validation. This ensures a consistent, user-friendly, and maintainable approach across the codebase.
+
+#### Example
+```python
+from jirassicpack.utils.io import prompt_with_schema
+from marshmallow import Schema, fields
+
+class MyFeatureOptionsSchema(Schema):
+    user = fields.Str(required=True)
+    start_date = fields.Str(required=True)
+    end_date = fields.Str(required=True)
+    # ... other fields ...
+
+def prompt_my_feature_options(opts, jira=None):
+    schema = MyFeatureOptionsSchema()
+    return prompt_with_schema(schema, dict(opts), jira=jira)
+```
+
+#### Checklist for New Feature Prompts
+- [ ] Define a Marshmallow schema for all required/optional options.
+- [ ] Use `prompt_with_schema` in your prompt function.
+- [ ] Pass the schema, initial options dict, and `jira` client if needed.
+- [ ] Remove any manual validation loops or error handling (handled by the utility).
+- [ ] Add/adjust docstrings and type hints for clarity.
+
+#### Best Practices
+- Use descriptive error messages in your schema (`error_messages={...}`) for a better user experience.
+- For custom field prompts (choices, password, etc.), pass a `field_prompt_map` to `prompt_with_schema`.
+- Use the `jira` argument for user/team selection fields.
+- Keep prompt functions concise—let the utility handle the loop and error display.
+
+See existing features for more examples.
+
+---
+
+## Centralized User-Facing Messages
+
+All user-facing messages and error strings should use the constants defined in `jirassicpack.utils.messages`. This ensures consistency and makes localization easier.
+
+### Example Usage
+```python
+from jirassicpack.utils.messages import SEE_NOBODY_CARES, FILE_WRITE_ERROR
+
+info(SEE_NOBODY_CARES)
+error(FILE_WRITE_ERROR.format(error=e))
+```
+
+### Best Practices
+- Always use a constant from `messages.py` for any user-facing string.
+- If a new message is needed, add it to `messages.py` with a descriptive name.
+- Use `.format()` for messages with dynamic content.
+- This approach makes it easy to update, localize, or audit all user-facing output.
+
+--- 

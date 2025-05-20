@@ -2,20 +2,17 @@
 # This feature allows users to update a field on an existing Jira issue by prompting for the issue key, field, and new value.
 # It writes the updated field and value to a Markdown file for record-keeping.
 
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, info
+from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, info, feature_error_handler, spinner, info_spared_no_expense
 from jirassicpack.utils.logging import contextual_log, redact_sensitive
-from jirassicpack.utils.jira import get_valid_project_key, get_valid_issue_type, get_valid_user, get_valid_field, get_valid_transition
-from jirassicpack.utils.io import validate_required, error, spinner, info_spared_no_expense, prompt_with_validation, render_markdown_report, get_option
+from jirassicpack.utils.io import error, info_spared_no_expense
 from jirassicpack.utils.logging import build_context
-from typing import Any, Dict
-import logging
-import json
+from typing import Any
 import time
-from marshmallow import Schema, fields, ValidationError, pre_load
-from jirassicpack.utils.rich_prompt import rich_error
-import re
+from marshmallow import fields
 from jirassicpack.utils.fields import IssueKeyField, BaseOptionsSchema, validate_nonempty
-from marshmallow import validate
+from jirassicpack.utils.io import prompt_with_schema
+from jirassicpack.constants import SEE_NOBODY_CARES
+from jirassicpack.analytics.helpers import build_report_sections
 
 class UpdateIssueOptionsSchema(BaseOptionsSchema):
     issue_key = IssueKeyField(required=True, error_messages={"required": "Issue key is required."})
@@ -23,131 +20,115 @@ class UpdateIssueOptionsSchema(BaseOptionsSchema):
     value = fields.Str(required=True, error_messages={"required": "Value is required."}, validate=validate_nonempty)
     # output_dir and unique_suffix are inherited
 
-def prompt_update_issue_options(opts: Dict[str, Any], jira=None) -> Dict[str, Any]:
+def prompt_update_issue_options(opts: dict, jira: Any = None) -> dict:
     """
-    Prompt for update issue options using Jira-aware helpers for field selection.
+    Prompt for update issue options using Marshmallow schema for validation and Jira-aware helpers.
+
+    Args:
+        opts (dict): Initial options/config dictionary.
+        jira (Any, optional): Jira client for interactive selection.
+
+    Returns:
+        dict: Validated options for the feature, or None if aborted.
     """
     schema = UpdateIssueOptionsSchema()
-    data = dict(opts)
-    while True:
-        try:
-            validated = schema.load(data)
-            return validated
-        except ValidationError as err:
-            for field, msgs in err.messages.items():
-                suggestion = None
-                if isinstance(msgs, list) and msgs and isinstance(msgs[0], tuple):
-                    message, suggestion = msgs[0]
-                elif isinstance(msgs, list) and msgs:
-                    message = msgs[0]
-                else:
-                    message = str(msgs)
-                if field == 'issue_key':
-                    data['issue_key'] = get_option(data, 'issue_key', prompt="🦕 Jira Issue Key:", required=True)
-                elif field == 'field' and jira and data.get('project') and data.get('issue_type'):
-                    data['field'] = get_valid_field(jira, data['project'], data['issue_type'])
-                else:
-                    data[field] = get_option(data, field, prompt=f"🦕 {field.replace('_', ' ').title()}: ", required=True)
-                rich_error(f"Input validation error for '{field}': {message}", suggestion)
-            continue
+    result = prompt_with_schema(schema, dict(opts), jira=jira, abort_option=True)
+    if result == "__ABORT__":
+        info("❌ Aborted update issue prompt.")
+        return None
+    return result
 
-def write_update_issue_file(filename: str, issue_key: str, field: str, value: str, user_email=None, batch_index=None, unique_suffix=None, context=None, result=None) -> None:
-    try:
-        summary_section = f"**Key:** {issue_key}\n\n**Field Updated:** {field}\n\n**New Value:** {value}"
-        details_section = ""
-        if result:
-            details_section = "| Field | Value |\n|-------|-------|\n"
-            for k, v in (result.items() if isinstance(result, dict) else []):
-                details_section += f"| {k} | {v} |\n"
-        content = render_markdown_report(
-            feature="update_issue",
-            user=user_email,
-            batch=batch_index,
-            suffix=unique_suffix,
-            feature_title="Update Issue",
-            summary_section=summary_section,
-            main_content_section=details_section
-        )
-        with open(filename, 'w') as f:
-            f.write(content)
-        info(f"🦕 Updated issue details written to {filename}", extra=context)
-    except Exception as e:
-        error(f"Failed to write updated issue file: {e}", extra=context)
+@feature_error_handler('update_issue')
+def update_issue(
+    jira: Any,
+    params: dict,
+    user_email: str = None,
+    batch_index: int = None,
+    unique_suffix: str = None
+) -> None:
+    """
+    Main feature entrypoint for updating a field on an existing Jira issue.
 
-def write_update_issue_json(filename: str, issue_key: str, field: str, value: str, result: dict = None, user_email=None, batch_index=None, unique_suffix=None, context=None) -> None:
-    try:
-        data = {
-            "issue_key": issue_key,
-            "field": field,
-            "value": value,
-            "result": result or {}
-        }
-        with open(filename, 'w') as f:
-            json.dump(data, f, indent=2)
-        info(f"🦕 Updated issue details written to {filename}", extra=context)
-    except Exception as e:
-        error(f"Failed to write updated issue JSON file: {e}", extra=context)
+    Args:
+        jira (Any): Authenticated Jira client instance.
+        params (dict): Parameters for the update (issue_key, field, value, etc).
+        user_email (str, optional): Email of the user running the report.
+        batch_index (int, optional): Batch index for batch runs.
+        unique_suffix (str, optional): Unique suffix for output file naming.
 
-def update_issue(jira: Any, params: Dict[str, Any], user_email=None, batch_index=None, unique_suffix=None) -> None:
+    Returns:
+        None. Writes Markdown and JSON reports to disk.
+    """
     correlation_id = params.get('correlation_id')
     context = build_context("update_issue", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
     start_time = time.time()
-    try:
-        contextual_log('info', f"🦕 [Update Issue] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='update_issue')
-        issue_key = params.get('issue_key')
-        if not issue_key:
-            error("issue_key is required.", extra=context)
-            contextual_log('error', "🦕 [Update Issue] Issue key is required but missing.", operation="validation", status="error", extra=context, feature='update_issue')
-            return
-        field = params.get('field')
-        if not field:
-            error("field is required.", extra=context)
-            contextual_log('error', "🦕 [Update Issue] Field is required but missing.", operation="validation", status="error", extra=context, feature='update_issue')
-            return
-        value = params.get('value')
-        if not value:
-            error("value is required.", extra=context)
-            contextual_log('error', "🦕 [Update Issue] Value is required but missing.", operation="validation", status="error", extra=context, feature='update_issue')
-            return
-        output_dir = params.get('output_dir', 'output')
-        unique_suffix = params.get('unique_suffix', '')
-        ensure_output_dir(output_dir)
-        # Patch JiraClient for logging
-        orig_update_issue = getattr(jira, 'update_issue', None)
-        if orig_update_issue:
-            def log_update_issue(*args, **kwargs):
-                contextual_log('debug', f"🦕 [Update Issue] Jira update_issue called with args and redacted kwargs.", extra=context, feature='update_issue')
-                resp = orig_update_issue(*args, **kwargs)
-                contextual_log('debug', f"🦕 [Update Issue] Jira update_issue response: {redact_sensitive(resp)}", extra=context, feature='update_issue')
-                return resp
-            jira.update_issue = log_update_issue
-        def do_update():
-            with spinner("🦕 Running Update Issue..."):
-                return jira.update_issue(
-                    issue_key=issue_key,
-                    fields={field: value}
-                )
-        result = retry_or_skip("Updating Jira issue", do_update)
-        if result is None:
-            info("🦖 See, Nobody Cares. No update was made.", extra=context)
-            contextual_log('warning', "No update was made.", operation="feature_end", status="skipped", extra=context, feature='update_issue')
-            return
-        filename = f"{output_dir}/{issue_key}_updated_issue{unique_suffix}.md"
-        write_update_issue_file(filename, issue_key, field, value, user_email, batch_index, unique_suffix, context=context, result=result)
-        contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='update_issue')
-        json_filename = f"{output_dir}/{issue_key}_updated_issue{unique_suffix}.json"
-        write_update_issue_json(json_filename, issue_key, field, value, result, user_email, batch_index, unique_suffix, context=context)
-        contextual_log('info', f"JSON file written: {json_filename}", operation="output_write", output_file=json_filename, status="success", extra=context, feature='update_issue')
-        celebrate_success()
-        info_spared_no_expense()
-        info(f"🦕 Updated issue written to {filename}", extra=context)
-        duration = int((time.time() - start_time) * 1000)
-        contextual_log('info', f"🦕 [Update Issue] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}). Duration: {duration}ms.", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='update_issue')
-    except KeyboardInterrupt:
-        contextual_log('warning', "[update_issue] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", extra=context, feature='update_issue')
-        info("Graceful exit from Update Issue feature.", extra=context)
-    except Exception as e:
-        contextual_log('error', f"🦕 [Update Issue] Exception occurred: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", extra=context, feature='update_issue')
-        error(f"🦕 [Update Issue] Exception: {e}", extra=context)
-        raise
-    return 
+    contextual_log('info', f"🦕 [Update Issue] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='update_issue')
+    issue_key = params.get('issue_key')
+    if not issue_key:
+        error(IS_REQUIRED.format(field='issue_key'), extra=context)
+        contextual_log('error', "🦕 [Update Issue] Issue key is required but missing.", operation="validation", status="error", extra=context, feature='update_issue')
+        return
+    field = params.get('field')
+    if not field:
+        error(IS_REQUIRED.format(field='field'), extra=context)
+        contextual_log('error', "🦕 [Update Issue] Field is required but missing.", operation="validation", status="error", extra=context, feature='update_issue')
+        return
+    value = params.get('value')
+    if not value:
+        from jirassicpack.constants import IS_REQUIRED
+        error(IS_REQUIRED.format(field='value'), extra=context)
+        contextual_log('error', "🦕 [Update Issue] Value is required but missing.", operation="validation", status="error", extra=context, feature='update_issue')
+        return
+    output_dir = params.get('output_dir', 'output')
+    unique_suffix = params.get('unique_suffix', '')
+    ensure_output_dir(output_dir)
+    # Patch JiraClient for logging
+    orig_update_issue = getattr(jira, 'update_issue', None)
+    if orig_update_issue:
+        def log_update_issue(*args, **kwargs):
+            contextual_log('debug', f"🦕 [Update Issue] Jira update_issue called with args and redacted kwargs.", extra=context, feature='update_issue')
+            resp = orig_update_issue(*args, **kwargs)
+            contextual_log('debug', f"🦕 [Update Issue] Jira update_issue response: {redact_sensitive(resp)}", extra=context, feature='update_issue')
+            return resp
+        jira.update_issue = log_update_issue
+    def do_update():
+        with spinner("🦕 Running Update Issue..."):
+            return jira.update_issue(
+                issue_key=issue_key,
+                fields={field: value}
+            )
+    result = retry_or_skip("Updating Jira issue", do_update)
+    if result is None:
+        from jirassicpack.constants import SEE_NOBODY_CARES
+        info(SEE_NOBODY_CARES, extra=context)
+        contextual_log('warning', "No update was made.", operation="feature_end", status="skipped", extra=context, feature='update_issue')
+        return
+    filename = f"{output_dir}/{issue_key}_updated_issue{unique_suffix}.md"
+    summary_section = f"**Key:** {issue_key}\n\n**Field Updated:** {field}\n\n**New Value:** {value}"
+    details_section = ""
+    if result:
+        details_section = "| Field | Value |\n|-------|-------|\n"
+        for k, v in (result.items() if isinstance(result, dict) else []):
+            details_section += f"| {k} | {v} |\n"
+    report = build_report_sections({
+        'header': header,
+        'summary': summary_section,
+        'action_items': action_items,
+        'grouped_sections': details_section,
+    })
+    write_report(filename, report, context, filetype='md', feature='update_issue', item_name='Update issue report')
+    contextual_log('info', f"Markdown file written: {filename}", operation="output_write", output_file=filename, status="success", extra=context, feature='update_issue')
+    json_filename = f"{output_dir}/{issue_key}_updated_issue{unique_suffix}.json"
+    json_data = {
+        "issue_key": issue_key,
+        "field": field,
+        "value": value,
+        "result": result or {}
+    }
+    write_report(json_filename, json_data, context, filetype='json', feature='update_issue', item_name='Update issue JSON report')
+    contextual_log('info', f"JSON file written: {json_filename}", operation="output_write", output_file=json_filename, status="success", extra=context, feature='update_issue')
+    celebrate_success()
+    info_spared_no_expense()
+    info(f"🦕 Updated issue written to {filename}", extra=context, feature='update_issue')
+    duration = int((time.time() - start_time) * 1000)
+    contextual_log('info', f"🦕 [Update Issue] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}). Duration: {duration}ms.", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(params), extra=context, feature='update_issue') 
