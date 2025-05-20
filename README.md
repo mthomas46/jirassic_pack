@@ -1,28 +1,40 @@
 # Jirassic Pack 🦖
 
+> The modern, Jurassic Park–themed CLI for Jira analytics, reporting, and automation.
+
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 ![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 <!-- Jurassic Park themed CLI banner GIF (replace with actual GIF) -->
 ![Jirassic Pack Banner Animation](docs/assets/jirassic_banner.gif)
+<!-- If you have a demo GIF, add it here. -->
+<!-- ![Demo GIF](docs/assets/jirassic_demo.gif) -->
 
-```
-      __
-     / _)
-.-^^^-/ /
-__/       /
-<__.|_|-|_|
+---
 
-JIRASSIC PACK
-```
+## Key Features
+- 🦖 Themed, interactive CLI for Jira
+- 📊 Advanced analytics and reporting
+- 📝 Create, update, and bulk-edit issues
+- 🗂️ LLM-powered ticket categorization and summaries
+- 📄 Automated documentation and release notes
+- 🔗 Integration with GitHub/GitLab PRs
+- ⏱️ Time tracking and worklogs
+- 🧑‍💻 Batch mode for multi-feature automation
+- 🦾 Local LLM integration (Ollama/Code Llama)
+- 🪵 Structured JSON logging and audit trail
 
-> The Ultimate Jurassic Park–themed Jira CLI Experience!
+---
+
+[Developer Guide](DEVELOPER_GUIDE.md) • [Open an Issue](https://github.com/your-repo/issues) • [Contributing](#contributing)
 
 ---
 
 ## Table of Contents
 - [Overview](#overview)
+- [Who is this for?](#who-is-this-for)
+- [Why Jirassic Pack?](#why-jirassic-pack)
 - [Quick Start](#quick-start)
 - [Configuration & Setup](#configuration--setup)
 - [Menus & Navigation](#menus--navigation)
@@ -34,7 +46,10 @@ JIRASSIC PACK
 - [Error Handling & Troubleshooting](#error-handling--troubleshooting)
 - [Advanced Usage](#advanced-usage)
 - [Glossary](#glossary)
-- [Contributing](#contributing)
+- [FAQ](#faq)
+- [Security](#security)
+- [Changelog](#changelog)
+- [Community & Contact](#community--contact)
 - [License](#license)
 - [Local LLM Integration: Using Jirassic Pack with Ollama7BPoc](#local-llm-integration-using-jirassic-pack-with-ollama7bpoc)
 
@@ -43,6 +58,26 @@ JIRASSIC PACK
 ## Overview
 
 Jirassic Pack is a robust, accessible, and feature-rich CLI tool for interacting with Jira. It supports YAML config, environment variables, CLI prompts, batch/bulk operations, analytics, time tracking, and automated documentation—all with standardized output and strong error handling.
+
+---
+
+## Who is this for?
+
+> - **Engineers:** Automate Jira workflows, generate reports, and analyze tickets.
+> - **Managers:** Get high-level summaries, team analytics, and actionable insights.
+> - **Data/DevOps:** Integrate with CI/CD, export logs, and monitor activity.
+
+---
+
+## Why Jirassic Pack?
+
+> - **Themed, modern CLI**: Enjoy a fun, Jurassic Park–inspired interface.
+> - **LLM-powered analytics**: Use AI to categorize, summarize, and analyze tickets.
+> - **Batch mode**: Run multiple features in sequence for automation.
+> - **Extensible**: Add new features easily; all are auto-discovered in the menu.
+> - **Robust error handling**: Every operation is validated and logged.
+> - **Local LLM support**: Use your own models for privacy and speed.
+> - **Beautiful output**: Markdown, JSON, and rich CLI panels.
 
 ---
 
@@ -139,14 +174,15 @@ Log Monitoring & Search
 | **Create Issue**        | Create new Jira issues | `project`, `summary` | `description`, `issue_type` | `.md`, `.json` | `POST /rest/api/3/issue` |
 | **Update Issue**        | Update fields on issues | `issue_key`, `field`, `value` |  | `.md`, `.json` | `PUT /rest/api/3/issue/{issueIdOrKey}` |
 | **Bulk Operations**     | Transition, comment, or assign multiple issues | `action`, `jql`, `value` |  | `.md`, `.json` | `POST /rest/api/3/issue/bulk`, `POST /rest/api/3/issue/{issueIdOrKey}/comment`, `POST /rest/api/3/issue/{issueIdOrKey}/transitions` |
-| **Sprint Board Management** | Summarize/manage boards and sprints | `board_name` |  | `.md` | `GET /rest/agile/1.0/board`, `GET /rest/agile/1.0/board/{boardId}/sprint`, `GET /rest/agile/1.0/sprint/{sprintId}/issue` |
-| **User/Team Analytics** | Analyze team workload and bottlenecks | `team`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/search`, `GET /rest/api/3/user` |
-| **Advanced Metrics**    | Cycle/lead time, throughput, outliers | `user`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/search` |
-| **Time Tracking Worklogs** | Summarize worklogs for users/timeframes | `user`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/issue/{issueIdOrKey}/worklog` |
-| **Automated Documentation** | Generate release notes, changelogs, etc. | `doc_type`, `project`, `version`, `sprint` |  | `.md` | `GET /rest/api/3/search` |
-| **Integration Tools**   | Scan for PR links and integrations | `integration_jql` |  | `.md` | `GET /rest/api/3/search` |
-| **Gather Metrics**      | Collect/report metrics for a user/project | `user`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/search` |
-| **Summarize Tickets**   | Summarize tickets, comments, acceptance criteria | `jql` |  | `.md` | `GET /rest/api/3/search`, `GET /rest/api/3/issue/{issueIdOrKey}/comment` |
+| **User/Team Analytics** | Analyze user/team activity, ticket stats, and generate analytics reports | `team`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/search`, `GET /rest/api/3/user` |
+| **Integration Tools**   | Scan issues for GitHub/GitLab PR links and generate integration reports | `integration_jql` |  | `.md` | `GET /rest/api/3/search` |
+| **Time Tracking Worklogs** | Summarize worklogs for a user and timeframe, with detailed Markdown output | `user`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/issue/{issueIdOrKey}/worklog` |
+| **Automated Documentation** | Generate release notes, changelogs, or sprint reviews from Jira issues | `doc_type`, `project`, `version`, `sprint` |  | `.md` | `GET /rest/api/3/search` |
+| **Advanced Metrics**    | Generate advanced metrics, breakdowns, and top-N analytics for issues | `user`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/search` |
+| **Sprint Board Management** | Summarize the state of a Jira board, sprints, and issues in the active sprint | `board_name` |  | `.md` | `GET /rest/agile/1.0/board`, `GET /rest/agile/1.0/board/{boardId}/sprint`, `GET /rest/agile/1.0/sprint/{sprintId}/issue` |
+| **Deep Ticket Summary** | Generate a full summary of a ticket, including changelog, comments, and all fields | `issue_key` | `output_dir`, `acceptance_criteria_field` | `.md` | `GET /rest/api/3/issue`, `GET /rest/api/3/issue/{issueIdOrKey}/changelog`, `GET /rest/api/3/issue/{issueIdOrKey}/comment` |
+| **Gather Metrics**      | Gather and report metrics for Jira issues, including grouping by type and summary statistics | `user`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/search` |
+| **Summarize Tickets**   | Generate summary reports for Jira tickets, including grouping, top assignees, and action items | `jql` |  | `.md` | `GET /rest/api/3/search`, `GET /rest/api/3/issue/{issueIdOrKey}/comment` |
 
 ---
 
@@ -241,36 +277,8 @@ options:
 > **Jira Note:**
 > **JQL** – Jira Query Language, used to filter issues.
 
-#### Sprint Board Management
-**Description:**  Summarize/manage Jira boards and sprints.
-
-**Jira API:**
-- [`GET /rest/agile/1.0/board`](https://developer.atlassian.com/cloud/jira/software/rest/api-group-boards/#api-rest-agile-1-0-board-get)
-- [`GET /rest/agile/1.0/board/{boardId}/sprint`](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprints/#api-rest-agile-1-0-board-boardid-sprint-get)
-- [`GET /rest/agile/1.0/sprint/{sprintId}/issue`](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint-issues/#api-rest-agile-1-0-sprint-sprintid-issue-get)
-
-**Parameters:**
-| Name       | Type   | Required | Description                |
-|------------|--------|----------|----------------------------|
-| board_name | str    | Yes      | Name of the board          |
-
-**Example Config:**
-```yaml
-feature: sprint_board_management
-options:
-  board_name: "Demo Board"
-```
-
-**Output:**  Markdown file in `output/`
-
-**Error Handling:**  Validates required fields, logs errors.
-
-> **Jira Note:**
-> **Board** – A visual display of issues, often used for Scrum or Kanban.
-> **Sprint** – A time-boxed period for completing work in Scrum.
-
 #### User/Team Analytics
-**Description:**  Analyze team workload and bottlenecks for a team over a timeframe.
+**Description:**  Analyze user/team activity, ticket stats, and generate analytics reports.
 
 **Jira API:**  [`GET /rest/api/3/search`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-get), [`GET /rest/api/3/user`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-users/#api-rest-api-3-user-get)
 
@@ -297,25 +305,21 @@ options:
 > **Jira Note:**
 > **User** – A Jira user account. **Team** – A group of users, often mapped to a project or board.
 
-#### Advanced Metrics
-**Description:**  Calculate cycle/lead time, throughput, and outliers for a user or team.
+#### Integration Tools
+**Description:**  Scan issues for GitHub/GitLab PR links and generate integration reports.
 
 **Jira API:**  [`GET /rest/api/3/search`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-get)
 
 **Parameters:**
-| Name       | Type   | Required | Description                |
-|------------|--------|----------|----------------------------|
-| user       | str    | Yes      | User account/email         |
-| start_date | str    | Yes      | Start date (YYYY-MM-DD)    |
-| end_date   | str    | Yes      | End date (YYYY-MM-DD)      |
+| Name            | Type   | Required | Description                |
+|-----------------|--------|----------|----------------------------|
+| integration_jql | str    | Yes      | JQL query for integration issues |
 
 **Example Config:**
 ```yaml
-feature: advanced_metrics
+feature: integration_tools
 options:
-  user: alice
-  start_date: 2024-01-01
-  end_date: 2024-01-31
+  integration_jql: "project = DEMO AND status = 'Done'"
 ```
 
 **Output:**  Markdown file in `output/`
@@ -323,10 +327,10 @@ options:
 **Error Handling:**  Validates required fields, logs errors.
 
 > **Jira Note:**
-> **Cycle Time** – Time from issue start to completion. **Lead Time** – Time from issue creation to completion.
+> **Integration** – Links to PRs or external tools in Jira issues.
 
 #### Time Tracking Worklogs
-**Description:**  Summarize worklogs for a user over a timeframe.
+**Description:**  Summarize worklogs for a user and timeframe, with detailed Markdown output.
 
 **Jira API:**  [`GET /rest/api/3/issue/{issueIdOrKey}/worklog`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-worklogs/#api-rest-api-3-issue-issueidorkey-worklog-get)
 
@@ -354,7 +358,7 @@ options:
 > **Worklog** – A record of time spent on an issue.
 
 #### Automated Documentation
-**Description:**  Generate release notes, changelogs, or sprint review docs from Jira issues.
+**Description:**  Generate release notes, changelogs, or sprint reviews from Jira issues.
 
 **Jira API:**  [`GET /rest/api/3/search`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-get)
 
@@ -382,21 +386,25 @@ options:
 > **Jira Note:**
 > **Release Notes** – A summary of changes for a release. **Changelog** – A list of changes/issues for a version.
 
-#### Integration Tools
-**Description:**  Scan for PR links and integrations in Jira issues.
+#### Advanced Metrics
+**Description:**  Generate advanced metrics, breakdowns, and top-N analytics for issues.
 
 **Jira API:**  [`GET /rest/api/3/search`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-get)
 
 **Parameters:**
-| Name            | Type   | Required | Description                |
-|-----------------|--------|----------|----------------------------|
-| integration_jql | str    | Yes      | JQL query for integration issues |
+| Name       | Type   | Required | Description                |
+|------------|--------|----------|----------------------------|
+| user       | str    | Yes      | User account/email         |
+| start_date | str    | Yes      | Start date (YYYY-MM-DD)    |
+| end_date   | str    | Yes      | End date (YYYY-MM-DD)      |
 
 **Example Config:**
 ```yaml
-feature: integration_tools
+feature: advanced_metrics
 options:
-  integration_jql: "project = DEMO AND status = 'Done'"
+  user: alice
+  start_date: 2024-01-01
+  end_date: 2024-01-31
 ```
 
 **Output:**  Markdown file in `output/`
@@ -404,10 +412,69 @@ options:
 **Error Handling:**  Validates required fields, logs errors.
 
 > **Jira Note:**
-> **Integration** – Links to PRs or external tools in Jira issues.
+> **Cycle Time** – Time from issue start to completion. **Lead Time** – Time from issue creation to completion.
+
+#### Sprint Board Management
+**Description:**  Summarize the state of a Jira board, sprints, and issues in the active sprint.
+
+**Jira API:**
+- [`GET /rest/agile/1.0/board`](https://developer.atlassian.com/cloud/jira/software/rest/api-group-boards/#api-rest-agile-1-0-board-get)
+- [`GET /rest/agile/1.0/board/{boardId}/sprint`](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprints/#api-rest-agile-1-0-board-boardid-sprint-get)
+- [`GET /rest/agile/1.0/sprint/{sprintId}/issue`](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint-issues/#api-rest-agile-1-0-sprint-sprintid-issue-get)
+
+**Parameters:**
+| Name       | Type   | Required | Description                |
+|------------|--------|----------|----------------------------|
+| board_name | str    | Yes      | Name of the board          |
+
+**Example Config:**
+```yaml
+feature: sprint_board_management
+options:
+  board_name: "Demo Board"
+```
+
+**Output:**  Markdown file in `output/`
+
+**Error Handling:**  Validates required fields, logs errors.
+
+> **Jira Note:**
+> **Board** – A visual display of issues, often used for Scrum or Kanban.
+> **Sprint** – A time-boxed period for completing work in Scrum.
+
+#### Deep Ticket Summary
+**Description:**  Generate a full summary of a ticket, including changelog, comments, and all fields.
+
+**Jira API:**
+- [`GET /rest/api/3/issue`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-get)
+- [`GET /rest/api/3/issue/{issueIdOrKey}/changelog`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-changelog/#api-rest-api-3-issue-issueidorkey-changelog-get)
+- [`GET /rest/api/3/issue/{issueIdOrKey}/comment`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/#api-rest-api-3-issue-issueidorkey-comment-get)
+
+**Parameters:**
+| Name                | Type   | Required | Description                |
+|---------------------|--------|----------|----------------------------|
+| issue_key           | str    | Yes      | Issue key                  |
+| output_dir          | str    | No       | Output directory           |
+| acceptance_criteria_field | str | No       | Acceptance criteria field |
+
+**Example Config:**
+```yaml
+feature: deep_ticket_summary
+options:
+  issue_key: DEMO-123
+  output_dir: summary_output
+  acceptance_criteria_field: "Acceptance Criteria"
+```
+
+**Output:**  Markdown file in `output/`
+
+**Error Handling:**  Validates required fields, logs errors.
+
+> **Jira Note:**
+> **Acceptance Criteria** – Conditions that must be met for a ticket to be considered complete.
 
 #### Gather Metrics
-**Description:**  Collect and report metrics for a user or project.
+**Description:**  Gather and report metrics for Jira issues, including grouping by type and summary statistics.
 
 **Jira API:**  [`GET /rest/api/3/search`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-get)
 
@@ -432,7 +499,7 @@ options:
 **Error Handling:**  Validates required fields, logs errors.
 
 #### Summarize Tickets
-**Description:**  Summarize tickets, comments, and acceptance criteria for a JQL query.
+**Description:**  Generate summary reports for Jira tickets, including grouping, top assignees, and action items.
 
 **Jira API:**
 - [`GET /rest/api/3/search`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-get)
@@ -943,3 +1010,55 @@ python jirassicpack/cli.py
 ---
 
 For more, see the full feature list and usage examples below! 
+
+## FAQ
+
+<details>
+<summary>How do I reset my config?</summary>
+Delete or edit your `.jirassicpack_cli_state.json` and `.env` files, or use the Settings menu in the CLI.
+</details>
+
+<details>
+<summary>How do I add a new feature?</summary>
+See the [Developer Guide](DEVELOPER_GUIDE.md#adding-a-new-feature). In short: create a new module in `jirassicpack/features/`, add it to `FEATURE_MANIFEST`, and it will appear in the menu.
+</details>
+
+<details>
+<summary>How do I use the local LLM?</summary>
+See the [Local LLM Integration](#local-llm-integration-using-jirassic-pack-with-ollama7bpoc) section. Start the local server, then use features that support LLM.
+</details>
+
+<details>
+<summary>How do I get help or report a bug?</summary>
+Open an issue on GitHub or see the [Contributing](#contributing) section.
+</details>
+
+---
+
+## Security
+
+> **Sensitive data (API tokens, passwords) are always redacted in logs.**
+> - Never share your log file without reviewing for sensitive project data.
+> - If you discover a security issue, please report it privately via GitHub issues or email the maintainer.
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes and version history.
+
+---
+
+## Community & Contact
+
+- For questions, open an issue or discussion on GitHub.
+- To contribute, fork the repo and open a pull request.
+- For real-time chat, join our (planned) Discord or Slack (link TBD).
+
+---
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+--- 
