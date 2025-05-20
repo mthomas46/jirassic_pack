@@ -1,3 +1,11 @@
+# --- Ensure we are running from the project root and can import jirassicpack ---
+import os
+import sys
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+os.chdir(project_root)
+
 import os
 import sys
 import time
@@ -5,9 +13,9 @@ import logging
 from logging.handlers import RotatingFileHandler
 from jirassicpack.config import ConfigLoader
 from jirassicpack.jira_client import JiraClient
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, prompt_text, prompt_select, prompt_password, prompt_checkbox, select_from_list
+from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, prompt_text, prompt_select, prompt_password, prompt_checkbox, select_from_list, halt_cli
 from jirassicpack.utils.logging import contextual_log, redact_sensitive
-from jirassicpack.utils.jira import select_jira_user, select_account_id, select_property_key, search_issues
+from jirassicpack.utils.jira import select_jira_user, select_account_id, select_property_key, search_issues, clear_all_caches, refresh_user_cache
 from colorama import Fore, Style
 from pythonjsonlogger import jsonlogger
 import json
@@ -32,6 +40,7 @@ from jirassicpack.utils.rich_prompt import (
 from mdutils.mdutils import MdUtils
 from jirassicpack.features import FEATURE_MANIFEST
 from jirassicpack.constants import ABORTED, FAILED_TO, WRITTEN_TO, NO_ISSUES_FOUND
+import types
 
 load_dotenv()
 
@@ -103,6 +112,9 @@ logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO)
 )
 logger = logging.getLogger("jirassicpack")
+
+# Set default logging level to INFO so logs are written
+logger.setLevel(logging.INFO)
 
 """
 cli.py
@@ -271,29 +283,30 @@ def load_cli_state():
                 extra={"traceback": traceback.format_exc(), "state_file": STATE_FILE}
             )
 
+def make_json_safe(obj):
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    if isinstance(obj, dict):
+        return {k: make_json_safe(v) for k, v in obj.items() if not isinstance(v, types.FunctionType)}
+    if isinstance(obj, (list, tuple, set)):
+        return [make_json_safe(v) for v in obj]
+    # For anything else, return its string representation
+    return str(obj)
+
 def save_cli_state():
     try:
-        state = {
+        state = make_json_safe({
             "recent_features": RECENT_FEATURES,
             "last_feature": LAST_FEATURE,
             "last_report_path": LAST_REPORT_PATH,
             "favorite_features": FAVORITE_FEATURES,
             "theme": CLI_THEME,
             "log_level": CLI_LOG_LEVEL,
-        }
+        })
         with open(STATE_FILE, "w") as f:
             json.dump(state, f, indent=2)
     except Exception as e:
-        import traceback
-        from jirassicpack.utils.logging import contextual_log
-        contextual_log(
-            'error',
-            f"Failed to save CLI state: {e}",
-            operation="save_cli_state",
-            error_type=type(e).__name__,
-            status="error",
-            extra={"traceback": traceback.format_exc(), "state_file": STATE_FILE}
-        )
+        error(f"Failed to save CLI state: {e}")
 
 # --- Onboarding: Step-by-step wizard for first run ---
 def onboarding_wizard():
@@ -398,7 +411,8 @@ def feature_menu():
                 {"name": f"Log level: {CLI_LOG_LEVEL}", "value": "log_level"},
                 {"name": "Clear history/reset favorites", "value": "clear_history"},
                 {"name": "⬅️ Back to main menu", "value": "return_to_main_menu"},
-                {"name": "What is this?", "value": "help"}
+                {"name": "What is this?", "value": "help"},
+                {"name": "Update all caches (refresh user list, etc)", "value": "update_caches"},
             ]
             setting = prompt_select("Settings:", choices=settings_choices)
             if setting == "return_to_main_menu":
@@ -430,6 +444,11 @@ def feature_menu():
                     rich_info("🦖 All history and favorites have been cleared.")
                 else:
                     rich_info("No changes made.")
+                continue
+            if setting == "update_caches":
+                clear_all_caches()
+                refresh_user_cache(jira)
+                rich_info("All major caches have been refreshed.")
                 continue
             continue
         if group == "Exit":
@@ -548,6 +567,7 @@ if first_run:
 # --- Main loop: persistently return to main menu ---
 def main() -> None:
     try:
+        logger.info('[DIAGNOSTIC] Logging is working at CLI startup.')
         # Show a single combined welcome panel
         user = None
         config_path = None
@@ -607,7 +627,7 @@ def main() -> None:
                         stop_local_llm_server()
                     except Exception as e:
                         error(f"[EXIT] Failed to stop local LLM server: {e}")
-                    return
+                    halt_cli("User exited from main menu.")
                 contextual_log('info', f"🦖 [CLI] User selected feature '{action}' for user {jira_conf.get('email')}", extra={"feature": action, "user": jira_conf.get('email'), "batch": None, "suffix": None})
                 run_feature(action, jira, options, user_email=jira_conf.get('email'))
     except Exception as e:
@@ -620,7 +640,7 @@ def main() -> None:
 def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str = None, batch_index: int = None, unique_suffix: str = None) -> None:
     update_llm_menu()
     context = {"feature": feature, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
-    contextual_log('debug', f"[DEBUG] run_feature called. feature={feature}, user_email={user_email}, batch_index={batch_index}, unique_suffix={unique_suffix}, options={options}", extra=context)
+    contextual_log('info', f"🦖 [CLI] run_feature: key={repr(feature)}", extra=context)
     menu_to_key = {
         "🧪 Test connection to Jira": "test_connection",
         "🐙 Test GitHub Connect": "test_github_connect",
@@ -843,35 +863,35 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
     prompt_func_name = f"prompt_{key}_options"
     prompt_func = None
     feature_module = FEATURE_REGISTRY[key]
-    contextual_log('debug', f"[DEBUG] Looking for prompt function: {prompt_func_name} in {feature_module}", extra=context)
+    contextual_log('info', f"🦖 [CLI] Looking for prompt function: {prompt_func_name} in {feature_module}", extra=context)
     if hasattr(feature_module, prompt_func_name):
         prompt_func = getattr(feature_module, prompt_func_name)
-        contextual_log('debug', f"[DEBUG] Found prompt function: {prompt_func_name} in module {feature_module}", extra=context)
+        contextual_log('info', f"🦖 [CLI] Found prompt function: {prompt_func_name} in module {feature_module}", extra=context)
     else:
         try:
             import importlib
             mod = importlib.import_module(f"jirassicpack.features.{key}")
             prompt_func = getattr(mod, prompt_func_name, None)
-            contextual_log('debug', f"[DEBUG] Imported module jirassicpack.features.{key}, found prompt_func: {bool(prompt_func)}", extra=context)
+            contextual_log('info', f"🦖 [CLI] Imported module jirassicpack.features.{key}, found prompt_func: {bool(prompt_func)}", extra=context)
         except Exception as e:
-            contextual_log('debug', f"[DEBUG] Could not import prompt function for {key}: {e}", extra=context)
+            contextual_log('error', f"🦖 [CLI] Could not import prompt function for {key}: {e}", exc_info=True, extra=context)
             prompt_func = None
     if prompt_func:
         import inspect
         sig = inspect.signature(prompt_func)
-        contextual_log('debug', f"[DEBUG] prompt_func signature: {sig}", extra=context)
+        contextual_log('info', f"🦖 [CLI] prompt_func signature: {sig}", extra=context)
         if 'jira' in sig.parameters:
-            contextual_log('debug', "[DEBUG] Calling prompt_func with jira", extra=context)
+            contextual_log('info', "[DEBUG] Calling prompt_func with jira", extra=context)
             params = prompt_func(options, jira=jira)
         else:
-            contextual_log('debug', "[DEBUG] Calling prompt_func without jira", extra=context)
+            contextual_log('info', "[DEBUG] Calling prompt_func without jira", extra=context)
             params = prompt_func(options)
-        contextual_log('debug', f"[DEBUG] prompt_func returned params: {params}", extra=context)
+        contextual_log('info', f"🦖 [CLI] prompt_func returned params: {params}", extra=context)
         if not params:
             contextual_log('info', f"🦖 [CLI] Feature '{key}' cancelled or missing parameters for user {user_email}", extra=context)
             return
     else:
-        contextual_log('debug', f"[DEBUG] No prompt_func found for {key}, using options as params.", extra=context)
+        contextual_log('info', f"🦖 [CLI] No prompt_func found for {key}, using options as params.", extra=context)
         params = options
     # Now call the feature handler (which should only perform the operation, with spinner inside if needed)
     start_time = time.time()
@@ -1404,7 +1424,7 @@ if __name__ == "__main__":
 
         def restart():
             observer.stop()
-            observer.join()
+            print("🔄 Code change detected, restarting CLI...")
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
         event_handler = ReloadHandler(restart)

@@ -13,6 +13,13 @@ from jirassicpack.utils.rich_prompt import rich_error
 from typing import Any
 from jirassicpack.analytics.helpers import build_report_sections, group_issues_by_field, make_top_n_list
 from jirassicpack.utils.llm import call_openai_llm
+import json
+import time
+import logging
+import re
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import concurrent.futures
 
 class SummarizeTicketsOptionsSchema(Schema):
     user = fields.Str(required=True)
@@ -83,6 +90,136 @@ def prompt_summarize_tickets_options(options: dict, jira: Any = None) -> dict:
     }
 
 prompt_summarize_tickets_options = log_entry_exit(prompt_summarize_tickets_options)
+
+# --- Robust JSON repair utility ---
+def extract_largest_json_object(s):
+    """Extract the largest valid JSON object from the start of the string using bracket counting."""
+    stack = []
+    last_index = None
+    for i, c in enumerate(s):
+        if c == '{':
+            stack.append(i)
+        elif c == '}':
+            if stack:
+                stack.pop()
+                if not stack:
+                    last_index = i
+                    break
+    if last_index is not None:
+        return s[:last_index+1]
+    return None
+
+# Global executor for reuse
+GLOBAL_EXECUTOR = ThreadPoolExecutor(max_workers=min(16, (os.cpu_count() or 8)))
+
+def build_llm_manager_prompt(params, example_categories, prompt_examples):
+    """Build the LLM prompt for manager-focused ticket categorization."""
+    preferred_categories = params.get('preferred_categories') if params else None
+    manager_prompt = (
+        "You are an expert Jira ticket analyst. Your goal is to help a manager quickly understand the main types of work being done.\n"
+        "Given the following list of tickets (with key, summary, and description), group them into a small number (ideally 5-10) of broad, manager-friendly categories. Each category should be:\n"
+        "- Actionable and meaningful to a manager (e.g., " + ', '.join(f'\"{cat}\"' for cat in example_categories) + ").\n"
+        "- Based on the type of work being done (e.g., running scripts, exporting data, updating configurations, resolving user issues) or who the work is being done for (e.g., a specific client or department).\n"
+        "- Avoid generic categories like 'Other' or 'Miscellaneous' unless absolutely necessary, and never use them for more than 10% of tickets.\n"
+        "- If a ticket could fit in more than one category, choose the one that would be most useful for a manager's report.\n"
+    )
+    if preferred_categories:
+        manager_prompt += ("- Where possible, use one of these preferred categories: " + ', '.join(f'\"{cat}\"' for cat in preferred_categories) + ".\n")
+    manager_prompt += "Return a JSON object mapping each ticket key to its category. Do not include any extra text, comments, or explanations—just output the JSON object. STRICT: Output ONLY valid JSON, no prose, no comments, no markdown.\n"
+    manager_prompt += prompt_examples
+    return manager_prompt
+
+
+def chunk_tickets(tickets, chunk_size):
+    """Yield successive chunks from the tickets list."""
+    for i in range(0, len(tickets), chunk_size):
+        yield tickets[i:i+chunk_size]
+
+
+def call_llm_for_chunks(chunk_prompts, use_async, llm_utils, response_format, executor):
+    """Call the LLM for each chunk, using async or threaded execution."""
+    chunk_results = []
+    if use_async:
+        async def process_all_chunks_async(chunk_prompts):
+            import asyncio
+            tasks = [
+                llm_utils.call_openai_llm_async(llm_prompt, response_format=response_format)
+                for _, llm_prompt in chunk_prompts
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            return [(chunk_keys, result) for (chunk_keys, _), result in zip(chunk_prompts, results)]
+        loop = asyncio.get_event_loop()
+        chunk_results = loop.run_until_complete(process_all_chunks_async(chunk_prompts))
+    else:
+        from concurrent.futures import as_completed
+        chunk_futures = [executor.submit(llm_utils.call_openai_llm, llm_prompt, response_format=response_format) for chunk_keys, llm_prompt in chunk_prompts]
+        for (chunk_keys, _), future in zip(chunk_prompts, as_completed(chunk_futures)):
+            try:
+                llm_response = future.result()
+                chunk_results.append((chunk_keys, llm_response))
+            except Exception as e:
+                chunk_results.append((chunk_keys, None))
+    return chunk_results
+
+
+def parse_llm_chunk_results(chunk_results, chunk_prompts, superbatch, logger):
+    """Parse LLM responses for each chunk, log/print diagnostics, and collect results."""
+    results = {}
+    failed_chunks = []
+    chunk_prompt_map = {tuple(keys): prompt for keys, prompt in chunk_prompts}
+    for chunk_keys, llm_response in chunk_results:
+        llm_prompt = chunk_prompt_map.get(tuple(chunk_keys), "<prompt not found>")
+        logger('info', f"[summarize_tickets] Sending LLM prompt for chunk {chunk_keys}: {llm_prompt[:500]}")
+        print(f"[summarize_tickets] Sending LLM prompt for chunk {chunk_keys}: {llm_prompt[:500]}")
+        logger('info', f"[summarize_tickets] Raw LLM response for chunk {chunk_keys}: {repr(llm_response)[:1000]}")
+        print(f"[summarize_tickets] Raw LLM response for chunk {chunk_keys}: {repr(llm_response)[:1000]}")
+        if not llm_response or not isinstance(llm_response, str):
+            logger('error', f"[summarize_tickets] LLM response is empty or not a string for chunk {chunk_keys}: {repr(llm_response)}")
+            failed_chunks.append([tc for tc in superbatch if tc['key'] in chunk_keys])
+            continue
+        try:
+            chunk_result = json.loads(llm_response)
+            results.update({k.strip().upper(): v for k, v in chunk_result.items()})
+        except Exception:
+            failed_chunks.append([tc for tc in superbatch if tc['key'] in chunk_keys])
+    return results, failed_chunks
+
+
+def llm_group_tickets(ticket_contexts, params, use_async, chunk_sizes, manager_prompt, executor, logger):
+    """Main LLM grouping logic: chunk tickets, call LLM, parse results, retry failed chunks with smaller sizes."""
+    import jirassicpack.utils.llm as llm_utils
+    response_format = {"type": "json_object"}
+    superbatch = ticket_contexts
+    results = {}
+    for chunk_size in chunk_sizes:
+        chunk_prompts = []
+        for chunk in chunk_tickets(superbatch, chunk_size):
+            chunk_keys = [t['key'] for t in chunk]
+            llm_prompt = manager_prompt + f"Tickets: {json.dumps(chunk)}"
+            chunk_prompts.append((chunk_keys, llm_prompt))
+        chunk_results = call_llm_for_chunks(chunk_prompts, use_async, llm_utils, response_format, executor)
+        for (chunk_keys, llm_response) in chunk_results:
+            print(f"[summarize_tickets][DIAG] Processed chunk keys: {chunk_keys}")
+            print(f"[summarize_tickets][DIAG] Chunk result: {llm_response}")
+            logger('info', f"[summarize_tickets][DIAG] Processed chunk keys: {chunk_keys}")
+            logger('info', f"[summarize_tickets][DIAG] Chunk result: {llm_response}")
+        chunk_results_parsed, failed_chunks = parse_llm_chunk_results(chunk_results, chunk_prompts, superbatch, logger)
+        # Merging logic: accumulate all mappings
+        results.update(chunk_results_parsed)
+        if not failed_chunks:
+            break
+        else:
+            superbatch = [tc for chunk in failed_chunks for tc in chunk]
+    # Any still-failed tickets get Uncategorized, but only if not already present
+    for tc in superbatch:
+        key = tc['key'].strip().upper()
+        if key not in results:
+            results[key] = "Uncategorized"
+            print(f"[llm_group_tickets][PATCH] Fallback: assigning {key} to 'Uncategorized'")
+            logger('warning', f"[llm_group_tickets][PATCH] Fallback: assigning {key} to 'Uncategorized'")
+    print(f"[summarize_tickets][DIAG] Final merged results: {list(results.items())[:10]}")
+    logger('info', f"[summarize_tickets][DIAG] Final merged results: {list(results.items())[:10]}")
+    return results
 
 def summarize_tickets(
     jira: Any,
@@ -221,59 +358,93 @@ def summarize_tickets(
                 else:
                     raise ValueError("Invalid grouping_fields entry")
                 info(f"[summarize_tickets] Grouping by: {grouping_label} (path: {grouping_path})")
-                # LLM grouping logic
-                if grouping_label == "LLM Suggested Category":
-                    import json
-                    import time
-                    ticket_contexts = []
-                    for issue in issues:
-                        ticket_contexts.append({
-                            "key": issue.get("key", "N/A"),
-                            "summary": safe_get(issue, ["fields", "summary"], ""),
-                            "description": safe_get(issue, ["fields", "description"], "")
-                        })
-                    llm_prompt = (
-                        "You are an expert Jira ticket analyst. "
-                        "Given the following list of tickets (with key, summary, and description), "
-                        "assign a short, human-readable category to each ticket based on its subject matter, "
-                        "such as 'Bug', 'Feature Request', 'Documentation', 'DevOps', 'Customer Issue', etc. "
-                        "Return a JSON object mapping each ticket key to its category.\n\n"
-                        "Tickets: " + json.dumps(ticket_contexts)
-                    )
-                    max_retries = 3
-                    wait_times = [2, 4, 8]
-                    category_map = None
-                    fallback_used = False
-                    for attempt in range(max_retries):
-                        try:
-                            info(f"[summarize_tickets] LLM categorization attempt {attempt+1}...")
-                            llm_response = call_openai_llm(llm_prompt)
-                            # Wait for LLM response to fully generate
-                            time.sleep(wait_times[attempt] if attempt < len(wait_times) else wait_times[-1])
-                            category_map = json.loads(llm_response)
-                            if isinstance(category_map, dict):
-                                break
-                        except Exception as e:
-                            error(f"[summarize_tickets] LLM categorization failed on attempt {attempt+1}: {e}. Retrying after {wait_times[attempt] if attempt < len(wait_times) else wait_times[-1]}s...")
-                            time.sleep(wait_times[attempt] if attempt < len(wait_times) else wait_times[-1])
-                    if not category_map or not isinstance(category_map, dict):
-                        error(f"[summarize_tickets] LLM categorization failed after {max_retries} attempts. Defaulting to 'Uncategorized'.")
-                        category_map = {issue.get("key", "N/A"): "Uncategorized" for issue in issues}
-                        fallback_used = True
-                    # Group tickets by LLM category
-                    from collections import defaultdict
-                    grouped = defaultdict(list)
-                    for issue in issues:
-                        key = issue.get("key", "N/A")
-                        category = category_map.get(key, "Uncategorized")
-                        grouped[category].append(issue)
-                    # Add a message to the report if fallback was used
-                    if fallback_used:
-                        info("[summarize_tickets] LLM fallback used: all tickets grouped as 'Uncategorized'.")
-                elif grouping_extra is not None:
-                    grouped = group_issues_by_field(issues, grouping_path, f"Other {grouping_label}", grouping_extra)
+                # Ensure use_async is defined before any use
+                use_async = params.get('llm_async', False) if params else False
+                # Build manager_prompt and related variables before process_superbatch
+                example_categories = [
+                    "Client Onboarding", "Data Migration", "Bug Fixes", "Script Execution", "User Account Management", "Compliance Reporting", "Client: JBS", "Client: NBCUniversal"
+                ]
+                prompt_examples = (
+                    "Example input:\n"
+                    "[\n"
+                    "  {\"key\": \"PA-123\", \"summary\": \"Onboard new client JBS\", \"description\": \"...\"},\n"
+                    "  {\"key\": \"PA-124\", \"summary\": \"Run data migration script for NBCUniversal\", \"description\": \"...\"},\n"
+                    "  {\"key\": \"PA-125\", \"summary\": \"Fix bug in user account creation\", \"description\": \"...\"},\n"
+                    "]\n"
+                )
+                manager_prompt = build_llm_manager_prompt(params, example_categories, prompt_examples)
+                ticket_contexts = [
+                    {
+                        "key": issue.get("key", "N/A"),
+                        "summary": safe_get(issue, ["fields", "summary"], ""),
+                        "description": safe_get(issue, ["fields", "description"], "")
+                    }
+                    for issue in issues
+                ]
+                # Diagnostic: log API key/model
+                openai_api_key = os.environ.get('OPENAI_API_KEY', None)
+                llm_model = params.get('llm_model', 'gpt-3.5-turbo') if params else 'gpt-3.5-turbo'
+                contextual_log('info', f"[summarize_tickets][DIAG] LLM API key present: {bool(openai_api_key)}, model: {llm_model}", feature='summarize_tickets')
+                print(f"[summarize_tickets][DIAG] LLM API key present: {bool(openai_api_key)}, model: {llm_model}")
+                superbatch_size = 100
+                use_multiprocessing = len(ticket_contexts) > 200
+                chunk_sizes = [20, 15, 10, 5]
+                all_ticket_categories = {}
+                logger = lambda level, msg: contextual_log(level, msg, feature='summarize_tickets')
+                if use_multiprocessing:
+                    import concurrent.futures
+                    superbatches = [ticket_contexts[i:i+superbatch_size] for i in range(0, len(ticket_contexts), superbatch_size)]
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=min(4, (os.cpu_count() or 2))) as pool:
+                        futures = [pool.submit(llm_group_tickets, sb, params, use_async, chunk_sizes, manager_prompt, GLOBAL_EXECUTOR, logger) for sb in superbatches]
+                        for future in concurrent.futures.as_completed(futures):
+                            all_ticket_categories.update(future.result())
+                    ticket_categories = all_ticket_categories
                 else:
-                    grouped = group_issues_by_field(issues, grouping_path, f"Other {grouping_label}")
+                    ticket_categories = llm_group_tickets(ticket_contexts, params, use_async, chunk_sizes, manager_prompt, GLOBAL_EXECUTOR, logger)
+                # After ticket_categories is set by process_superbatch or multiprocessing, before building grouped:
+                print(f"[summarize_tickets][DIAG] ticket_categories length: {len(ticket_categories)}")
+                print(f"[summarize_tickets][DIAG] ticket_categories sample: {list(ticket_categories.items())[:10]}")
+                contextual_log('info', f"[summarize_tickets][DIAG] ticket_categories length: {len(ticket_categories)}", feature='summarize_tickets')
+                contextual_log('info', f"[summarize_tickets][DIAG] ticket_categories sample: {list(ticket_categories.items())[:10]}", feature='summarize_tickets')
+                issue_keys = [str(i.get("key", "N/A")).strip().upper() for i in issues]
+                category_keys = list(ticket_categories.keys())
+                print(f"[summarize_tickets][DIAG] Types of issue keys: {[type(k) for k in issue_keys]}")
+                print(f"[summarize_tickets][DIAG] Types of category keys: {[type(k) for k in category_keys]}")
+                for k in issue_keys:
+                    if k not in category_keys:
+                        print(f"[summarize_tickets][DIAG] Key {repr(k)} (type {type(k)}) not in LLM mapping keys: {[repr(ck) for ck in category_keys]}")
+                        for ck in category_keys:
+                            print(f"[summarize_tickets][DIAG] {repr(k)} == {repr(ck)}: {k == ck}")
+                # Build grouped with fuzzy match
+                if ticket_categories:
+                    grouped = {}
+                    for issue in issues:
+                        key = str(issue.get("key", "N/A")).strip().upper()
+                        category = ticket_categories.get(key)
+                        used_fuzzy = False
+                        if category is None:
+                            # Fuzzy match: try to find a key in category_keys that matches after normalization
+                            for ck in category_keys:
+                                if str(ck).strip().upper() == key:
+                                    category = ticket_categories[ck]
+                                    used_fuzzy = True
+                                    contextual_log('info', f"[summarize_tickets] Fuzzy match: {key} == {ck}", feature='summarize_tickets')
+                                    print(f"[summarize_tickets] Fuzzy match: {key} == {ck}")
+                                    break
+                        if category is None:
+                            category = "Uncategorized"
+                            contextual_log('warning', f"[summarize_tickets] Key {key} not found in LLM categories. Falling back to 'Uncategorized'.", feature='summarize_tickets')
+                        print(f"[summarize_tickets] Ticket {key} assigned to category: {category}{' (fuzzy)' if used_fuzzy else ''}")
+                        contextual_log('info', f"[summarize_tickets] Ticket {key} assigned to category: {category}{' (fuzzy)' if used_fuzzy else ''}", feature='summarize_tickets')
+                        grouped.setdefault(category, []).append(issue)
+                else:
+                    grouped = {}
+                    contextual_log('warning', '[summarize_tickets] ticket_categories is empty after LLM categorization. No tickets will be grouped.', feature='summarize_tickets')
+                # --- DIAGNOSTICS: Print/log grouped structure before rendering ---
+                print(f"[DIAG] Final grouped keys: {list(grouped.keys())}")
+                print(f"[DIAG] Group sizes: {[(k, len(v)) for k, v in grouped.items()]}")
+                contextual_log('info', f"[DIAG] Final grouped keys: {list(grouped.keys())}", feature='summarize_tickets')
+                contextual_log('info', f"[DIAG] Group sizes: {[(k, len(v)) for k, v in grouped.items()]}", feature='summarize_tickets')
                 # Build sections using helpers
                 header = "# 🗂️ Ticket Summary Report\n\n"
                 header += "**Feature:** Summarize Tickets  "
@@ -358,4 +529,40 @@ def summarize_tickets(
         questionary.select("Select an option:", choices=["Return to previous menu"]).ask()
         return 
 
-summarize_tickets = log_entry_exit(summarize_tickets) 
+summarize_tickets = log_entry_exit(summarize_tickets)
+
+# Diagnostic: test a single LLM chunk call and print/log the raw response
+
+def diagnose_llm_chunk(tickets, params=None):
+    import jirassicpack.utils.llm as llm_utils
+    import json
+    example_categories = [
+        "Client Onboarding", "Data Migration", "Bug Fixes", "Script Execution", "User Account Management", "Compliance Reporting", "Client: JBS", "Client: NBCUniversal"
+    ]
+    prompt_examples = (
+        "Example input:\n"
+        "[\n"
+        "  {\"key\": \"PA-123\", \"summary\": \"Onboard new client JBS\", \"description\": \"...\"},\n"
+        "  {\"key\": \"PA-124\", \"summary\": \"Run data migration script for NBCUniversal\", \"description\": \"...\"},\n"
+        "  {\"key\": \"PA-125\", \"summary\": \"Fix bug in user account creation\", \"description\": \"...\"},\n"
+        "]\n"
+    )
+    manager_prompt = (
+        "You are an expert Jira ticket analyst. Your goal is to help a manager quickly understand the main types of work being done.\n"
+        "Given the following list of tickets (with key, summary, and description), group them into a small number (ideally 5-10) of broad, manager-friendly categories. Each category should be:\n"
+        "- Actionable and meaningful to a manager (e.g., " + ', '.join(f'\"{cat}\"' for cat in example_categories) + ").\n"
+        "- Based on the type of work being done (e.g., running scripts, exporting data, updating configurations, resolving user issues) or who the work is being done for (e.g., a specific client or department).\n"
+        "- Avoid generic categories like 'Other' or 'Miscellaneous' unless absolutely necessary, and never use them for more than 10% of tickets.\n"
+        "- If a ticket could fit in more than one category, choose the one that would be most useful for a manager's report.\n"
+    )
+    manager_prompt += "Return a JSON object mapping each ticket key to its category. Do not include any extra text, comments, or explanations—just output the JSON object. STRICT: Output ONLY valid JSON, no prose, no comments, no markdown.\n"
+    manager_prompt += prompt_examples
+    llm_prompt = manager_prompt + f"Tickets: {json.dumps(tickets)}"
+    print("[diagnose_llm_chunk] Sending prompt to LLM:")
+    print(llm_prompt[:1000] + ("..." if len(llm_prompt) > 1000 else ""))
+    try:
+        response = llm_utils.call_openai_llm(llm_prompt, response_format={"type": "json_object"})
+        print("[diagnose_llm_chunk] Raw LLM response:")
+        print(response)
+    except Exception as e:
+        print(f"[diagnose_llm_chunk] LLM call failed: {e}") 
