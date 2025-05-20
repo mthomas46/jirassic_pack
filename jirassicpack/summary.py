@@ -12,6 +12,7 @@ from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
 from typing import Any
 from jirassicpack.analytics.helpers import build_report_sections, group_issues_by_field, make_top_n_list
+from jirassicpack.utils.llm import call_openai_llm
 
 class SummarizeTicketsOptionsSchema(Schema):
     user = fields.Str(required=True)
@@ -203,16 +204,76 @@ def summarize_tickets(
                     ("Resolution", ["fields", "resolution", "name"]),
                     ("Assignee", ["fields", "assignee", "displayName"]),
                     ("Created Month", ["fields", "created"], "month"),
+                    ("LLM Suggested Category", None),
                 ]
                 grouping_choice = questionary.select(
                     "How would you like to group the tickets in the summary report?",
                     choices=[f[0] for f in grouping_fields],
                     default="Issue Type"
                 ).ask()
-                grouping_label, grouping_path = next(f for f in grouping_fields if f[0] == grouping_choice)
+                # Robust unpacking for 2- or 3-element tuples
+                selected_grouping = next(f for f in grouping_fields if f[0] == grouping_choice)
+                if len(selected_grouping) == 2:
+                    grouping_label, grouping_path = selected_grouping
+                    grouping_extra = None
+                elif len(selected_grouping) == 3:
+                    grouping_label, grouping_path, grouping_extra = selected_grouping
+                else:
+                    raise ValueError("Invalid grouping_fields entry")
                 info(f"[summarize_tickets] Grouping by: {grouping_label} (path: {grouping_path})")
-                # Group by selected field (now using helper)
-                grouped = group_issues_by_field(issues, grouping_path, f"Other {grouping_label}")
+                # LLM grouping logic
+                if grouping_label == "LLM Suggested Category":
+                    import json
+                    import time
+                    ticket_contexts = []
+                    for issue in issues:
+                        ticket_contexts.append({
+                            "key": issue.get("key", "N/A"),
+                            "summary": safe_get(issue, ["fields", "summary"], ""),
+                            "description": safe_get(issue, ["fields", "description"], "")
+                        })
+                    llm_prompt = (
+                        "You are an expert Jira ticket analyst. "
+                        "Given the following list of tickets (with key, summary, and description), "
+                        "assign a short, human-readable category to each ticket based on its subject matter, "
+                        "such as 'Bug', 'Feature Request', 'Documentation', 'DevOps', 'Customer Issue', etc. "
+                        "Return a JSON object mapping each ticket key to its category.\n\n"
+                        "Tickets: " + json.dumps(ticket_contexts)
+                    )
+                    max_retries = 3
+                    wait_times = [2, 4, 8]
+                    category_map = None
+                    fallback_used = False
+                    for attempt in range(max_retries):
+                        try:
+                            info(f"[summarize_tickets] LLM categorization attempt {attempt+1}...")
+                            llm_response = call_openai_llm(llm_prompt)
+                            # Wait for LLM response to fully generate
+                            time.sleep(wait_times[attempt] if attempt < len(wait_times) else wait_times[-1])
+                            category_map = json.loads(llm_response)
+                            if isinstance(category_map, dict):
+                                break
+                        except Exception as e:
+                            error(f"[summarize_tickets] LLM categorization failed on attempt {attempt+1}: {e}. Retrying after {wait_times[attempt] if attempt < len(wait_times) else wait_times[-1]}s...")
+                            time.sleep(wait_times[attempt] if attempt < len(wait_times) else wait_times[-1])
+                    if not category_map or not isinstance(category_map, dict):
+                        error(f"[summarize_tickets] LLM categorization failed after {max_retries} attempts. Defaulting to 'Uncategorized'.")
+                        category_map = {issue.get("key", "N/A"): "Uncategorized" for issue in issues}
+                        fallback_used = True
+                    # Group tickets by LLM category
+                    from collections import defaultdict
+                    grouped = defaultdict(list)
+                    for issue in issues:
+                        key = issue.get("key", "N/A")
+                        category = category_map.get(key, "Uncategorized")
+                        grouped[category].append(issue)
+                    # Add a message to the report if fallback was used
+                    if fallback_used:
+                        info("[summarize_tickets] LLM fallback used: all tickets grouped as 'Uncategorized'.")
+                elif grouping_extra is not None:
+                    grouped = group_issues_by_field(issues, grouping_path, f"Other {grouping_label}", grouping_extra)
+                else:
+                    grouped = group_issues_by_field(issues, grouping_path, f"Other {grouping_label}")
                 # Build sections using helpers
                 header = "# 🗂️ Ticket Summary Report\n\n"
                 header += "**Feature:** Summarize Tickets  "
@@ -246,7 +307,7 @@ def summarize_tickets(
                 grouped_sections = ""
                 for group_label, issues_in_group in grouped.items():
                     anchor = str(group_label).lower().replace(' ', '-')
-                    grouped_sections += f"\n## {group_label} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
+                    grouped_sections += f"\n---\n\n### {group_label} Issues ({len(issues_in_group)})\n<a name=\"{anchor}-issues\"></a>\n\n"
                     grouped_sections += "| Key | Summary | Status | Resolved |\n|---|---|---|---|\n"
                     for issue in issues_in_group:
                         key = issue.get('key', 'N/A')
