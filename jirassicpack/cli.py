@@ -5,36 +5,33 @@ import logging
 from logging.handlers import RotatingFileHandler
 from jirassicpack.config import ConfigLoader
 from jirassicpack.jira_client import JiraClient
-import questionary
-from typing import Any, Dict
-from jirassicpack.utils.io import ensure_output_dir, print_section_header, celebrate_success, retry_or_skip, spinner, progress_bar, error, info, prompt_text, prompt_select, prompt_password, prompt_checkbox, prompt_path
+from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, prompt_text, prompt_select, prompt_password, prompt_checkbox, log_entry_exit
 from jirassicpack.utils.logging import contextual_log, redact_sensitive
-from jirassicpack.utils.jira import select_jira_user, get_valid_project_key, get_valid_issue_type, get_valid_user, get_valid_field, get_valid_transition, select_account_id, select_property_key, search_issues
+from jirassicpack.utils.jira import select_jira_user, select_account_id, select_property_key, search_issues
 from colorama import Fore, Style
-import pyfiglet
 from pythonjsonlogger import jsonlogger
 import json
 from dotenv import load_dotenv
 import uuid
-import platform
 import socket
-from datetime import datetime
 import re
-import inspect
 from jirassicpack.log_monitoring import log_parser
 from jirassicpack.features.ticket_discussion_summary import ticket_discussion_summary
 from jirassicpack.features.test_local_llm import test_local_llm
+from jirassicpack.features.deep_ticket_summary import deep_ticket_summary
 import subprocess
 import shutil
 import requests
 import threading
 from jirassicpack.utils.rich_prompt import (
     rich_panel, rich_info, rich_error, rich_success,
-    panel_life_finds_a_way, panel_spared_no_expense, panel_objects_in_mirror, panel_clever_girl,
-    panel_hold_onto_your_butts, panel_big_pile_of_errors, panel_jurassic_ascii, panel_nobody_cares,
-    panel_crazy_son_of_a, panel_welcome_dr, panel_combined_welcome
+    panel_objects_in_mirror, panel_clever_girl,
+    panel_hold_onto_your_butts, panel_big_pile_of_errors, panel_nobody_cares,
+    panel_combined_welcome
 )
 from mdutils.mdutils import MdUtils
+from jirassicpack.features import FEATURE_MANIFEST
+from jirassicpack.constants import ABORTED, FAILED_TO, WRITTEN_TO, NO_ISSUES_FOUND
 
 load_dotenv()
 
@@ -180,17 +177,14 @@ FEATURE_COLORS = {
     'ticket_discussion_summary': Fore.LIGHTYELLOW_EX,
 }
 
-# Utility for output directory
-def ensure_output_dir(directory: str) -> None:
-    """
-    Ensure the output directory exists, creating it if necessary.
-    Used by all features to guarantee output files can be written.
-    """
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory)
-
-# Feature registration table (imported lazily to avoid circular imports)
-FEATURE_REGISTRY: Dict[str, Any] = {}
+# Dynamically generate FEATURE_REGISTRY and FEATURE_GROUPS from FEATURE_MANIFEST
+FEATURE_REGISTRY = {f['key']: f['module'] for f in FEATURE_MANIFEST}
+FEATURE_GROUPS = {}
+for f in FEATURE_MANIFEST:
+    group = f['group']
+    if group not in FEATURE_GROUPS:
+        FEATURE_GROUPS[group] = []
+    FEATURE_GROUPS[group].append((f["emoji"] + " " + f["label"], f["key"]))
 
 def register_features():
     global FEATURE_REGISTRY
@@ -215,94 +209,341 @@ def register_features():
         "log_parser": log_parser,
         "ticket_discussion_summary": ticket_discussion_summary,
         "test_local_llm": test_local_llm,
+        "deep_ticket_summary": deep_ticket_summary,
     }
 
-# --- Feature Groupings (Reordered for UX) ---
-FEATURE_GROUPS = {
-    "Test Connection": [
-        ("🧪 Test connection to Jira", "test_connection"),
-        ("🐙 Test GitHub Connect", "test_github_connect"),
-    ],
-    "Local LLM Tools": [
-        ("🦖 Start Local LLM Server", "start_local_llm_server"),
-        ("🛑 Stop Local LLM Server", "stop_local_llm_server"),
-        ("🪵 View Local LLM Logs", "view_local_llm_logs"),
-        ("🪵 View Ollama Server Log", "view_ollama_server_log"),
-        ("👀 Live Tail Ollama Server Log", "live_tail_ollama_server_log"),
-        ("🔍 Search Ollama Server Log", "search_ollama_server_log"),
-        ("🧹 Filter Ollama Server Log", "filter_ollama_server_log"),
-        ("🦖 Test Local LLM", "test_local_llm"),
-        ("👀 Live Tail Local LLM Logs", "live_tail_local_llm_logs"),
-    ],
-    "Issues & Tasks": [
-        ("📝 Create a new issue", "create_issue"),
-        ("✏️ Update an existing issue", "update_issue"),
-        ("🔁 Bulk operations", "bulk_operations"),
-        ("📋 Get task (issue)", "get_task"),
-        ("🔎 Search issues", "search_issues"),
-    ],
-    "Boards & Sprints": [
-        ("📋 Sprint and board management", "sprint_board_management"),
-    ],
-    "Analytics & Reporting": [
-        ("📊 Advanced metrics and reporting", "advanced_metrics"),
-        ("👤 User and team analytics", "user_team_analytics"),
-        ("⏱️ Time tracking and worklogs", "time_tracking_worklogs"),
-        ("📈 Gather metrics for a user", "gather_metrics"),
-        ("🗂️ Summarize tickets", "summarize_tickets"),
-        ("📄 Ticket Discussion Summary", "ticket_discussion_summary"),
-    ],
-    "Integrations & Docs": [
-        ("🔗 Integration with other tools", "integration_tools"),
-        ("📄 Automated documentation", "automated_documentation"),
-    ],
-    "Jira Connection & Users": [
-        ("👥 Output all users", "output_all_users"),
-        ("🏷️ Output all user property keys", "output_all_user_property_keys"),
-        ("🧑‍💻 Get user by accountId/email", "get_user"),
-        ("🔍 Search users", "search_users"),
-        ("🔎 Search users by displayname and email", "search_users_by_displayname_email"),
-        ("🏷️ Get user property", "get_user_property"),
-        ("🙋 Get current user (myself)", "get_current_user"),
-        ("⚙️ Get mypreferences", "get_mypreferences"),
-    ],
-    "Logs & Diagnostics": [
-        ("🔍 Search logs for points of interest", "log_parser"),
-        ("🦖 Analyze Logs and Generate Report", "analyze_logs_and_generate_report"),
-    ],
-    "Preferences": [
-        ("⚙️ Get mypreferences", "get_mypreferences"),
-    ],
-    "Exit": [
-        ("🚪 Exit", "exit"),
-    ],
-}
+STATE_FILE = os.path.join(os.getcwd(), ".jirassicpack_cli_state.json")
 
+RECENT_FEATURES = []
+LAST_FEATURE = None
+LAST_REPORT_PATH = None
+FAVORITE_FEATURES = []
+CLI_THEME = "default"
+CLI_LOG_LEVEL = LOG_LEVEL
+
+# --- State Persistence Helpers ---
+def load_cli_state():
+    global RECENT_FEATURES, LAST_FEATURE, LAST_REPORT_PATH, FAVORITE_FEATURES, CLI_THEME, CLI_LOG_LEVEL
+    try:
+        with open(STATE_FILE, "r") as f:
+            state = json.load(f)
+        RECENT_FEATURES = state.get("recent_features", [])
+        LAST_FEATURE = state.get("last_feature")
+        LAST_REPORT_PATH = state.get("last_report_path")
+        FAVORITE_FEATURES = state.get("favorite_features", [])
+        CLI_THEME = state.get("theme", "default")
+        CLI_LOG_LEVEL = state.get("log_level", LOG_LEVEL)
+    except Exception as e:
+        import traceback
+        from jirassicpack.utils.logging import contextual_log
+        contextual_log(
+            'error',
+            f"Failed to load CLI state: {e}",
+            operation="load_cli_state",
+            error_type=type(e).__name__,
+            status="error",
+            extra={"traceback": traceback.format_exc(), "state_file": STATE_FILE}
+        )
+        RECENT_FEATURES = []
+        LAST_FEATURE = None
+        LAST_REPORT_PATH = None
+        FAVORITE_FEATURES = []
+        CLI_THEME = "default"
+        CLI_LOG_LEVEL = LOG_LEVEL
+        # Optionally, recreate the file as empty/default
+        try:
+            with open(STATE_FILE, "w") as f:
+                json.dump({
+                    "recent_features": [],
+                    "last_feature": None,
+                    "last_report_path": None,
+                    "favorite_features": [],
+                    "theme": "default",
+                    "log_level": LOG_LEVEL,
+                }, f, indent=2)
+        except Exception as e2:
+            contextual_log(
+                'error',
+                f"Failed to recreate CLI state file: {e2}",
+                operation="recreate_cli_state",
+                error_type=type(e2).__name__,
+                status="error",
+                extra={"traceback": traceback.format_exc(), "state_file": STATE_FILE}
+            )
+
+def save_cli_state():
+    try:
+        state = {
+            "recent_features": RECENT_FEATURES,
+            "last_feature": LAST_FEATURE,
+            "last_report_path": LAST_REPORT_PATH,
+            "favorite_features": FAVORITE_FEATURES,
+            "theme": CLI_THEME,
+            "log_level": CLI_LOG_LEVEL,
+        }
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        import traceback
+        from jirassicpack.utils.logging import contextual_log
+        contextual_log(
+            'error',
+            f"Failed to save CLI state: {e}",
+            operation="save_cli_state",
+            error_type=type(e).__name__,
+            status="error",
+            extra={"traceback": traceback.format_exc(), "state_file": STATE_FILE}
+        )
+
+# --- Onboarding: Step-by-step wizard for first run ---
+def onboarding_wizard():
+    rich_panel("""
+🦖 Welcome to Jirassic Pack CLI!
+
+This wizard will help you get started in under a minute.
+""", title="Welcome!", style="banner")
+    # Step 1: Theme
+    theme = prompt_select("Choose your preferred CLI theme:", choices=["default", "light", "dark", "jurassic", "matrix"])
+    global CLI_THEME
+    CLI_THEME = theme
+    save_cli_state()
+    rich_info(f"Theme set to {theme}.")
+    # Step 2: Log level
+    log_level = prompt_select("Set the log verbosity:", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    global CLI_LOG_LEVEL
+    CLI_LOG_LEVEL = log_level
+    save_cli_state()
+    rich_info(f"Log level set to {log_level}.")
+    # Step 3: Tour
+    rich_panel("""
+Main CLI Features:
+- 🦖 Modular menu: Select features by group, favorites, or search.
+- ⭐ Pin favorites for quick access.
+- 🗂️ Batch mode: Run multiple features in sequence.
+- ⚙️ Settings: Change theme, log level, and clear history.
+- 🆘 Contextual help in every menu.
+- 📄 All reports saved to the output directory.
+""", title="Quick Tour", style="info")
+    # Step 4: Docs
+    open_docs = prompt_select("Would you like to open the documentation in your browser?", choices=["Yes", "No"])
+    if open_docs == "Yes":
+        import webbrowser
+        webbrowser.open("https://github.com/your-org/jirassicpack")
+        rich_info("Opened documentation in your browser.")
+    rich_success("Onboarding complete! You can rerun this wizard from Settings at any time.")
+
+# --- Enhanced Main Menu (onboarding wizard, batch mode with per-feature options) ---
 def feature_menu():
-    group_names = list(FEATURE_GROUPS.keys())
+    from jirassicpack.features import FEATURE_MANIFEST
+    global RECENT_FEATURES, LAST_FEATURE, LAST_REPORT_PATH, FAVORITE_FEATURES, CLI_THEME, CLI_LOG_LEVEL
+    group_names = ["Batch mode: Run multiple features", "Favorites", "Recently Used"] + list(FEATURE_GROUPS.keys()) + ["Help", "Settings", "Onboarding Wizard", "Exit"]
     while True:
+        group_choices = group_names + ["What is this?"]
         group = prompt_select(
             "Select a feature group:",
-            choices=group_names
+            choices=group_choices,
+            default=group_names[0]
         )
-        contextual_log('info', f"🦖 [CLI] User selected feature group: {group}", operation="user_prompt", status="answered", params={"group": group}, extra={"feature": "cli"})
-        if not group or group not in FEATURE_GROUPS:
-            continue  # Defensive: skip invalid or None group
+        if group == "What is this?":
+            rich_info("🦖 The main menu lets you choose feature groups, access favorites, run multiple features, or change settings. Use arrow keys, numbers, or type to search.")
+            continue
+        if group == "Onboarding Wizard":
+            onboarding_wizard()
+            continue
+        if group == "Batch mode: Run multiple features":
+            # Multi-select features from all groups
+            all_features = [(f["emoji"] + " " + f["label"], f["key"]) for f in FEATURE_MANIFEST]
+            selected = select_from_list(all_features, message="Select features to run in batch mode (space to select, enter to confirm):", multi=True)
+            if not selected:
+                continue
+            # For each feature, prompt for options if prompt function exists
+            import importlib
+            batch_plan = []
+            for feat_key in selected:
+                feat = next((f for f in FEATURE_MANIFEST if f["key"] == feat_key), None)
+                prompt_func_name = f"prompt_{feat_key}_options"
+                prompt_func = None
+                feature_module = feat["module"] if feat else None
+                if feature_module and hasattr(feature_module, prompt_func_name):
+                    prompt_func = getattr(feature_module, prompt_func_name)
+                else:
+                    try:
+                        mod = importlib.import_module(f"jirassicpack.features.{feat_key}")
+                        prompt_func = getattr(mod, prompt_func_name, None)
+                    except Exception:
+                        prompt_func = None
+                if prompt_func:
+                    import inspect
+                    sig = inspect.signature(prompt_func)
+                    if 'jira' in sig.parameters:
+                        params = prompt_func({}, jira=None)  # Will be re-prompted with real jira later
+                    else:
+                        params = prompt_func({})
+                else:
+                    params = {}
+                batch_plan.append({"key": feat_key, "label": feat["label"] if feat else feat_key, "options": params})
+            # Show summary
+            rich_panel("\n".join([f"{i+1}. {item['label']} (key: {item['key']})" for i, item in enumerate(batch_plan)]), title="Batch Plan", style="info")
+            confirm = prompt_select("Proceed to run these features in sequence?", choices=["Yes", "No"])
+            if confirm != "Yes":
+                continue
+            yield batch_plan, "batch_mode"
+            continue
+        if group == "Help":
+            rich_info("🦖 Jirassic Pack CLI Help\n- Use arrow keys, numbers, or type to search.\n- Press Enter to select.\n- 'Back' returns to previous menu.\n- 'Abort' cancels the current operation.\n- 'Settings' lets you change config, log level, and theme.\n- 'Favorites' lets you pin features for quick access.\n- 'Batch mode' lets you run multiple features in sequence.\n- 'Run last feature again' and 'View last report' are available in 'Recently Used'.")
+            continue
+        if group == "Settings":
+            settings_choices = [
+                {"name": f"Theme: {CLI_THEME}", "value": "theme"},
+                {"name": f"Log level: {CLI_LOG_LEVEL}", "value": "log_level"},
+                {"name": "Clear history/reset favorites", "value": "clear_history"},
+                {"name": "⬅️ Back to main menu", "value": "return_to_main_menu"},
+                {"name": "What is this?", "value": "help"}
+            ]
+            setting = prompt_select("Settings:", choices=settings_choices)
+            if setting == "return_to_main_menu":
+                continue
+            if setting == "help":
+                rich_info("🦖 Settings lets you change the CLI theme, log level, and clear your history/favorites. Theme affects color scheme. Log level controls verbosity.")
+                continue
+            if setting == "theme":
+                theme = prompt_select("Select CLI theme:", choices=["default", "light", "dark", "jurassic", "matrix"])
+                CLI_THEME = theme
+                save_cli_state()
+                rich_info(f"Theme set to {theme} (will apply on next run if not immediate).")
+                continue
+            if setting == "log_level":
+                log_level = prompt_select("Select log level:", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+                CLI_LOG_LEVEL = log_level
+                save_cli_state()
+                rich_info(f"Log level set to {log_level} (will apply on next run if not immediate).")
+                continue
+            if setting == "clear_history":
+                confirm = prompt_select("Are you sure you want to clear all history and reset favorites?", choices=["Yes, clear all", "No, cancel"])
+                if confirm == "Yes, clear all":
+                    RECENT_FEATURES.clear()
+                    FAVORITE_FEATURES.clear()
+                    global LAST_FEATURE, LAST_REPORT_PATH
+                    LAST_FEATURE = None
+                    LAST_REPORT_PATH = None
+                    save_cli_state()
+                    rich_info("🦖 All history and favorites have been cleared.")
+                else:
+                    rich_info("No changes made.")
+                continue
+            continue
         if group == "Exit":
+            save_cli_state()
             yield "exit", None
             return
-        features = FEATURE_GROUPS[group]
-        while True:
-            submenu_choices = [{"name": name, "value": value} for name, value in features]
-            submenu_choices.append({"name": "⬅️ Return to previous menu", "value": "return_to_main_menu"})
+        # Contextual help for group menus
+        if group not in FEATURE_GROUPS and group not in ["Favorites", "Recently Used"]:
+            continue
+        if group == "Favorites":
+            fav_choices = []
+            for i, feat in enumerate(FAVORITE_FEATURES):
+                fav_choices.append({"name": f"[{i+1}] {feat['emoji']} {feat['label']} — {feat['description']}", "value": feat['key']})
+            if fav_choices:
+                fav_choices.append({"name": "Unpin a feature", "value": "unpin_feature"})
+            fav_choices.append({"name": "⬅️ Back to main menu", "value": "return_to_main_menu"})
+            fav_choices.append({"name": "What is this?", "value": "help"})
             feature = prompt_select(
-                f"Select a feature from '{group}':",
-                choices=submenu_choices
+                "Favorite features (pinned):",
+                choices=fav_choices
             )
-            contextual_log('info', f"🦖 [CLI] User selected feature: {feature}", operation="user_prompt", status="answered", params={"feature": feature}, extra={"feature": "cli"})
             if feature == "return_to_main_menu":
-                break  # Go back to group selection
+                continue
+            if feature == "help":
+                rich_info("🦖 Favorites are features you have pinned for quick access. Pin/unpin features from any group menu.")
+                continue
+            if feature == "unpin_feature":
+                if not FAVORITE_FEATURES:
+                    rich_info("No favorites to unpin.")
+                    continue
+                unpin_choices = [f"{feat['emoji']} {feat['label']}" for feat in FAVORITE_FEATURES]
+                to_unpin = prompt_select("Select a feature to unpin:", choices=unpin_choices)
+                idx = unpin_choices.index(to_unpin)
+                FAVORITE_FEATURES.pop(idx)
+                save_cli_state()
+                rich_info(f"Unpinned {to_unpin} from favorites.")
+                continue
             yield feature, group
+            continue
+        if group == "Recently Used":
+            recent_choices = []
+            if LAST_FEATURE:
+                recent_choices.append({"name": f"🔁 Run last feature again: {LAST_FEATURE['emoji']} {LAST_FEATURE['label']}", "value": LAST_FEATURE['key']})
+            if LAST_REPORT_PATH:
+                recent_choices.append({"name": f"📄 View last report: {LAST_REPORT_PATH}", "value": "view_last_report"})
+            for i, feat in enumerate(RECENT_FEATURES[-5:][::-1]):
+                recent_choices.append({"name": f"[{i+1}] {feat['emoji']} {feat['label']} — {feat['description']}", "value": feat['key']})
+            recent_choices.append({"name": "⬅️ Back to main menu", "value": "return_to_main_menu"})
+            recent_choices.append({"name": "What is this?", "value": "help"})
+            feature = prompt_select(
+                "Recently used features:",
+                choices=recent_choices
+            )
+            if feature == "return_to_main_menu":
+                continue
+            if feature == "help":
+                rich_info("🦖 Recently Used shows your last 5 features and quick actions. Use it to quickly rerun or access recent reports.")
+                continue
+            if feature == "view_last_report":
+                if LAST_REPORT_PATH and os.path.exists(LAST_REPORT_PATH):
+                    os.system(f"open '{LAST_REPORT_PATH}'" if sys.platform == "darwin" else f"xdg-open '{LAST_REPORT_PATH}'")
+                else:
+                    rich_info("No last report found.")
+                continue
+            yield feature, group
+            continue
+        # Normal group
+        features = FEATURE_GROUPS[group]
+        feature_map = {f['key']: f for f in FEATURE_MANIFEST if f['group'] == group}
+        submenu_choices = []
+        for i, (name, key) in enumerate(features):
+            feat = feature_map.get(key)
+            desc = f" — {feat['description']}" if feat and 'description' in feat else ""
+            shortcut = f"[{i+1}] "
+            submenu_choices.append({"name": f"{shortcut}{name}{desc}", "value": key})
+        submenu_choices.append({"name": "Pin a feature to Favorites", "value": "pin_feature"})
+        submenu_choices.append({"name": "⬅️ Back to main menu", "value": "return_to_main_menu"})
+        submenu_choices.append({"name": "What is this?", "value": "help"})
+        feature = prompt_select(
+            f"Select a feature from '{group}': (type to search or use number)",
+            choices=submenu_choices
+        )
+        if feature == "return_to_main_menu":
+            continue  # Go back to group selection
+        if feature == "help":
+            rich_info(f"🦖 This menu shows all features in the '{group}' group. Pin your favorites, or select a feature to run.")
+            continue
+        if feature == "pin_feature":
+            pin_choices = [f"{feat['emoji']} {feat['label']}" for feat in feature_map.values() if feat not in FAVORITE_FEATURES]
+            if not pin_choices:
+                rich_info("All features in this group are already pinned.")
+                continue
+            to_pin = prompt_select("Select a feature to pin:", choices=pin_choices)
+            idx = pin_choices.index(to_pin)
+            feat_to_pin = [f for f in feature_map.values() if f not in FAVORITE_FEATURES][idx]
+            FAVORITE_FEATURES.append(feat_to_pin)
+            save_cli_state()
+            rich_info(f"Pinned {to_pin} to favorites.")
+            continue
+        # Track recent
+        feat_obj = feature_map.get(feature)
+        if feat_obj and feat_obj not in RECENT_FEATURES:
+            RECENT_FEATURES.append(feat_obj)
+            save_cli_state()
+        if feat_obj:
+            LAST_FEATURE = feat_obj
+            save_cli_state()
+        yield feature, group
+
+# Load CLI state at startup
+first_run = not os.path.exists(STATE_FILE)
+load_cli_state()
+if first_run:
+    onboarding_wizard()
 
 # --- Main loop: persistently return to main menu ---
 def main() -> None:
@@ -310,7 +551,7 @@ def main() -> None:
         # Show a single combined welcome panel
         user = None
         config_path = None
-        log_level = LOG_LEVEL
+        log_level = CLI_LOG_LEVEL
         if len(sys.argv) > 1:
             for arg in sys.argv:
                 if arg.startswith('--config='):
@@ -348,37 +589,18 @@ def main() -> None:
             contextual_log('info', f"🦖 [CLI] Connecting to Jira at {jira_conf['url']} as {jira_conf['email']}", extra={"feature": "cli", "user": jira_conf['email'], "batch": None, "suffix": None, "easteregg": "hold_onto_your_butts"})
             jira = JiraClient(jira_conf['url'], jira_conf['email'], jira_conf['api_token'])
         register_features()
-        # Batch mode: run each feature with merged options
-        if features:
-            global_options = config.get_options()
-            correlation_id = str(uuid.uuid4())
-            contextual_log('info', f"🦖 [CLI] Batch mode: {len(features)} features queued. Correlation ID: {correlation_id}", extra={"feature": "cli", "user": None, "batch": None, "suffix": None, "correlation_id": correlation_id})
-            for i, feat in enumerate(progress_bar(features, desc="Batch Processing")):
-                name = feat.get('name')
-                feat_options = feat.get('options', {})
-                merged_options = {**global_options, **feat_options}
-                unique_suffix = f"_{int(time.time())}_{i}"
-                merged_options['unique_suffix'] = unique_suffix
-                merged_options['correlation_id'] = correlation_id
-                print(f"\n{WARNING_YELLOW}--- Running feature {i+1}/{len(features)}: {name} ---{RESET}")
-                contextual_log('info', f"🦖 [CLI] Running feature: {name} | Options: {redact_sensitive(merged_options)} | Batch index: {i} | Suffix: {unique_suffix} | Correlation ID: {correlation_id}", extra={"feature": name, "user": None, "batch": i, "suffix": unique_suffix, "correlation_id": correlation_id})
-                run_feature(name, jira, merged_options, user_email=jira_conf.get('email'), batch_index=i, unique_suffix=unique_suffix)
-            contextual_log('info', "🦖 [CLI] Batch run complete!", extra={"feature": "cli", "user": None, "batch": None, "suffix": None, "correlation_id": correlation_id})
-            panel_spared_no_expense()
-            panel_crazy_son_of_a()
-            contextual_log('info', "🦖 [CLI] Welcome to Jurassic Park.", extra={"feature": "cli", "user": jira_conf.get('email'), "batch": None, "suffix": None, "correlation_id": correlation_id})
-            info("🦖 Welcome to Jurassic Park.")
-            return
-        # Single feature mode
-        if feature:
-            contextual_log('info', f"🦖 [CLI] Running feature '{feature}' for user {jira_conf.get('email')}", extra={"feature": feature, "user": jira_conf.get('email'), "batch": None, "suffix": None})
-            contextual_log('info', f"🦖 [CLI] Feature options: {redact_sensitive(options)}", extra={"feature": feature, "user": jira_conf.get('email'), "batch": None, "suffix": None})
-            run_feature(feature, jira, options, user_email=jira_conf.get('email'))
-            return
         # Interactive mode: persistent main menu loop
         while True:
             print(f"\n{WARNING_YELLOW}{Style.BRIGHT}Select a feature to run:{RESET}")
             for action, group in feature_menu():
+                if group == "batch_mode":
+                    # action is a list of dicts: {key, label, options}
+                    for i, item in enumerate(action):
+                        feat_key = item["key"]
+                        feat_options = item["options"]
+                        contextual_log('info', f"🦖 [CLI] Batch mode running feature '{feat_key}' for user {jira_conf.get('email')}", extra={"feature": feat_key, "user": jira_conf.get('email'), "batch": i, "suffix": None})
+                        run_feature(feat_key, jira, feat_options, user_email=jira_conf.get('email'), batch_index=i, unique_suffix=f"_batch_{i}")
+                    continue
                 if action == "exit":
                     print(f"{JUNGLE_GREEN}Goodbye!{RESET}")
                     contextual_log('info', f"🦖 [CLI] User exited from main menu.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
@@ -427,6 +649,10 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         "⚙️ Get mypreferences": "get_mypreferences",
         "🙋 Get current user (myself)": "get_current_user",
         "🔍 Search logs for points of interest": "log_parser",
+        "🏷️ Output all user property keys": "output_all_user_property_keys",
+        "🔎 Search issues": "search_issues",
+        "📄 Ticket Discussion Summary": "ticket_discussion_summary",
+        "👀 Live Tail Local LLM Logs": "live_tail_local_llm_logs",
         "🏷️ Output all user property keys": "output_all_user_property_keys",
         "🔎 Search issues": "search_issues",
         "📄 Ticket Discussion Summary": "ticket_discussion_summary",
@@ -483,11 +709,11 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             key_ = prompt_text("User key (leave blank if not used):")
             result = jira.get_user(account_id=account_id or None, email=email or None, username=username or None, key=key_ or None)
             if not result:
-                info("Aborted: No user found with provided details.")
+                info(ABORTED)
                 return
             pretty_print_result(result)
         except Exception as e:
-            error(f"🦖 Error fetching user: {e}", extra=context)
+            error(FAILED_TO.format(action='fetch user', error=e), extra=context)
             contextual_log('error', f"🦖 [CLI] Error fetching user: {e}", exc_info=True, extra=context)
         return
     if key == "search_users":
@@ -497,13 +723,13 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             result = jira.search_users(query=query)
             if not result:
                 panel_nobody_cares()
-                info("Aborted: No users found for query.")
+                info(NO_ISSUES_FOUND)
                 return
             panel_clever_girl()
             pretty_print_result(result)
         except Exception as e:
             panel_big_pile_of_errors()
-            error(f"🦖 Error searching users: {e}", extra=context)
+            error(FAILED_TO.format(action='search users', error=e), extra=context)
             contextual_log('error', f"🦖 [CLI] Error searching users: {e}", exc_info=True, extra=context)
         return
     if key == "search_users_by_displayname_email":
@@ -518,11 +744,11 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             contextual_log('info', f"🦖 [CLI] User searched users by displayname and email with params: {params}", extra=context)
             result = jira.get('users/search', params=params)
             if not result:
-                info("Aborted: No users found for provided display name/email.")
+                info(NO_ISSUES_FOUND)
                 return
             pretty_print_result(result)
         except Exception as e:
-            error(f"🦖 Error searching users: {e}", extra=context)
+            error(FAILED_TO.format(action='search users by displayname and email', error=e), extra=context)
             contextual_log('error', f"🦖 [CLI] Error searching users: {e}", exc_info=True, extra=context)
         return
     if key == "get_user_property":
@@ -531,11 +757,11 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             property_key = select_property_key(jira, account_id)
             result = jira.get_user_property(account_id, property_key)
             if not result:
-                info("Aborted: No property found for user.")
+                info(ABORTED)
                 return
             pretty_print_result(result)
         except Exception as e:
-            error(f"🦖 Error fetching user property: {e}", extra=context)
+            error(FAILED_TO.format(action='fetch user property', error=e), extra=context)
             contextual_log('error', f"🦖 [CLI] Error fetching user property: {e}", exc_info=True, extra=context)
         return
     if key == "get_task":
@@ -547,7 +773,7 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
                 pretty_print_result(result)
             return
         except Exception as e:
-            error(f"🦖 Error fetching task: {e}", extra=context)
+            error(FAILED_TO.format(action='fetch task', error=e), extra=context)
             contextual_log('error', f"🦖 [CLI] Error fetching task: {e}", exc_info=True, extra=context)
         return
     if key == "get_mypreferences":
@@ -562,29 +788,29 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
                 print(DANGER_RED + error_msg + RESET)
                 contextual_log('error', f"🦖 [CLI] {error_msg} Exception: {e}", exc_info=True, extra=context)
             else:
-                error(f"🦖 Error fetching mypreferences: {e}", extra=context)
+                error(FAILED_TO.format(action='fetch mypreferences', error=e), extra=context)
                 contextual_log('error', f"🦖 [CLI] Exception: {e}", exc_info=True, extra=context)
         return
     if key == "get_current_user":
         try:
             result = jira.get_current_user()
             if not result:
-                info("Aborted: No current user found.")
+                info(ABORTED)
                 return
             pretty_print_result(result)
         except Exception as e:
-            error(f"🦖 Error fetching current user: {e}", extra=context)
+            error(FAILED_TO.format(action='fetch current user', error=e), extra=context)
             contextual_log('error', f"🦖 [CLI] Error fetching current user: {e}", exc_info=True, extra=context)
         return
     if key == "search_issues":
         try:
             issue_key = search_issues(jira)
             if not issue_key:
-                info("Aborted: No issue selected.")
+                info(NO_ISSUES_FOUND)
                 return
             info(f"Selected issue: {issue_key}")
         except Exception as e:
-            error(f"🦖 Error searching issues: {e}", extra=context)
+            error(FAILED_TO.format(action='search issues', error=e), extra=context)
             contextual_log('error', f"🦖 [CLI] Error searching issues: {e}", exc_info=True, extra=context)
         return
     if key == "start_local_llm_server":
@@ -681,7 +907,7 @@ def test_connection(jira: JiraClient, options: dict = None, context: str = "") -
             info("🦖 Welcome to Jurassic Park.")
         except Exception as e:
             contextual_log('error', f"🦖 [CLI] [test_connection] Failed to connect to Jira: {e}", exc_info=True, extra=context)
-            error(f"🦖 Failed to connect to Jira: {e}", extra=context)
+            error(FAILED_TO.format(action='connect to Jira', error=e), extra=context)
 
 def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -> None:
     context = {"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix}
@@ -692,7 +918,7 @@ def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -
             users = jira.get('users/search', params={'maxResults': 1000})
             if not users:
                 panel_nobody_cares()
-                info("Aborted: No users found or operation cancelled.")
+                info(NO_ISSUES_FOUND)
                 return
             filename = f"{output_dir}/jira_users{unique_suffix}.md"
             try:
@@ -701,13 +927,13 @@ def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -
                     for user in users:
                         f.write(f"- {user.get('displayName', user.get('name', 'Unknown'))} ({user.get('emailAddress', 'N/A')})\n")
                 panel_objects_in_mirror()
-                info("🦖 Objects in mirror are closer than they appear.")
+                info(WRITTEN_TO.format(item='user list', filename=filename))
             except Exception as file_err:
                 panel_big_pile_of_errors()
-                error(f"🦖 Failed to write user list to file: {file_err}", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
+                error(FAILED_TO.format(action='write user list to file', error=file_err), extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
         except Exception as e:
             panel_big_pile_of_errors()
-            error(f"🦖 Failed to fetch users: {e}", extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
+            error(FAILED_TO.format(action='fetch users', error=e), extra={"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix})
 
 def output_all_user_property_keys(jira: JiraClient, options: dict, unique_suffix: str = "") -> None:
     context = {"feature": "output_all_user_property_keys", "user": None, "batch": None, "suffix": unique_suffix}
@@ -715,7 +941,7 @@ def output_all_user_property_keys(jira: JiraClient, options: dict, unique_suffix
     ensure_output_dir(output_dir)
     label, user_obj = select_jira_user(jira)
     if not user_obj or not user_obj.get('accountId'):
-        info("Aborted: No user selected.")
+        info(ABORTED)
         return
     account_id = user_obj['accountId']
     display_name = user_obj.get('displayName', account_id)
@@ -733,10 +959,9 @@ def output_all_user_property_keys(jira: JiraClient, options: dict, unique_suffix
                     for k in keys:
                         f.write(f"- {k.get('key')}\n")
             print(f"{JUNGLE_GREEN}🦖 User property keys written to {filename}{RESET}")
-            info("🦖 Objects in mirror are closer than they appear.")
-            contextual_log('info', f"🦖 [CLI] Writing user property keys to {filename}", operation="output_write", output_file=filename, status="success", extra=context)
+            info(WRITTEN_TO.format(item='user property keys', filename=filename))
         except Exception as e:
-            error(f"🦖 Failed to fetch user property keys: {e}", extra=context)
+            error(FAILED_TO.format(action='fetch user property keys', error=e), extra=context)
             contextual_log('error', f"🦖 [CLI] [output_all_user_property_keys] Exception: {e}", exc_info=True, extra=context)
 
 def pretty_print_result(result):
@@ -765,7 +990,7 @@ def is_process_running(process_name):
 
 def get_llm_status():
     try:
-        import psutil
+        import psutil  # Only import if needed
     except ImportError:
         return '🔴 (psutil not installed)'
     ollama_running = is_process_running('ollama')
@@ -810,7 +1035,7 @@ def start_local_llm_server():
             subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             info("Started 'ollama serve' in the background.")
         except Exception as e:
-            error(f"[ERROR] Failed to start 'ollama serve': {e}")
+            error(FAILED_TO.format(action='start ollama', error=e))
     else:
         info("'ollama serve' is already running.")
     import os
@@ -844,7 +1069,7 @@ def start_local_llm_server():
             info(f"Started 'http_api.py' in the background from {api_path}.")
             logger.info(f"[LLM] Started http_api.py in the background from {api_path}.")
         except Exception as e:
-            error(f"[LLM] Failed to start 'http_api.py': {e}")
+            error(FAILED_TO.format(action='start http_api.py', error=e))
             logger.error(f"[LLM] Failed to start 'http_api.py': {e}")
     else:
         info("[LLM] 'http_api.py' is already running.")
@@ -866,7 +1091,7 @@ def start_local_llm_server():
         else:
             error("[ERROR] Local LLM health check failed after waiting.")
     except Exception as e:
-        error(f"[ERROR] Health check error: {e}")
+        error(FAILED_TO.format(action='health check', error=e))
     info("🦖 Local LLM server startup attempted. Use 'Test Local LLM' to verify health.")
 
 def stop_local_llm_server():
@@ -897,7 +1122,7 @@ def stop_local_llm_server():
                 proc.terminate()
                 stopped = True
             except Exception as e:
-                error(f"[ERROR] Could not terminate PID {proc.info['pid']}: {e}")
+                error(FAILED_TO.format(action='terminate process', error=e))
         # Optionally, kill by port 5000
         import subprocess
         try:
@@ -953,7 +1178,6 @@ def view_local_llm_logs():
 
 def live_tail_file(filepath, label):
     import os
-    import sys
     import time
     rich_panel(f"--- {label} (live tail, Ctrl+C to exit) ---", style="info")
     last_inode = None
@@ -1143,7 +1367,7 @@ def analyze_logs_and_generate_report():
             md_file.new_list(warnings[-5:])
         md_file.new_line('---')
     md_file.create_md_file()
-    info(f"🦖 Log analysis report written to {output_path}")
+    info(WRITTEN_TO.format(item='Log analysis report', filename=output_path))
 
 def test_github_connect(config: dict = None) -> None:
     """
@@ -1177,4 +1401,34 @@ def test_github_connect(config: dict = None) -> None:
         rich_error(f"❌ Exception during GitHub connect test: {e}")
 
 if __name__ == "__main__":
-    main() 
+    if os.environ.get("JIRASSICPACK_AUTORELOAD") == "1":
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+        import threading
+
+        class ReloadHandler(FileSystemEventHandler):
+            def __init__(self, restart):
+                self.restart = restart
+            def on_any_event(self, event):
+                if event.src_path.endswith(".py"):
+                    print("🔄 Code change detected, reloading...")
+                    self.restart()
+
+        def restart():
+            observer.stop()
+            observer.join()
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        event_handler = ReloadHandler(restart)
+        observer = Observer()
+        observer.schedule(event_handler, path=os.path.dirname(__file__), recursive=True)
+        observer.start()
+        try:
+            main()
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            observer.stop()
+        observer.join()
+    else:
+        main() 
