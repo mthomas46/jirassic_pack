@@ -25,4 +25,4 @@ config.yaml
 !example.env
 
 # Output directory
-output/ 
+output/ .jirassicpack_cli_state.json
