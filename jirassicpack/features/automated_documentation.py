@@ -75,8 +75,8 @@ def write_automated_doc_file(
         # Try to get project category from first issue
         project_category = safe_get(issues[0], ['fields', 'project', 'projectCategory', 'name'], 'N/A') if issues else 'N/A'
         # Report header
-        header = f"# 📄 Automated Documentation Report\n\n"
-        header += f"**Feature:** Automated Documentation  "
+        header = "# 📄 Automated Documentation Report\n\n"
+        header += "**Feature:** Automated Documentation  "
         header += f"**Project:** {safe_get(issues[0], ['fields', 'project', 'key'], 'N/A') if issues else 'N/A'}  "
         header += f"**Doc type:** {doc_type}  "
         header += f"**Version:** {safe_get(issues[0], ['fields', 'fixVersions', 0, 'name'], 'N/A') if issues else 'N/A'}  "
@@ -87,14 +87,14 @@ def write_automated_doc_file(
         # Report summary table
         summary_table = "| Metric | Value |\n|---|---|\n"
         summary_table += f"| Total Issues | {len(issues)} |\n"
-        for itype, group in grouped.items():
-            summary_table += f"| {itype} | {len(group)} |\n"
+        for group_label, issues_in_group in grouped.items():
+            summary_table += f"| {group_label} | {len(issues_in_group)} |\n"
         summary_table += "\n---\n\n"
         # Build table of contents
         toc = "## Table of Contents\n"
-        for itype in grouped:
-            anchor = itype.lower().replace(' ', '-')
-            toc += f"- [{itype} Issues](#{anchor}-issues)\n"
+        for group_label in grouped:
+            anchor = group_label.lower().replace(' ', '-')
+            toc += f"- [{group_label} Issues](#{anchor}-issues)\n"
         toc += "\n"
         # Action items: unresolved, overdue, blocked
         action_items = "## Action Items\n"
@@ -131,18 +131,18 @@ def write_automated_doc_file(
             next_steps += "- Consider rebalancing workload among assignees.\n"
         # Grouped issue sections
         grouped_sections = ""
-        for itype, group in grouped.items():
-            anchor = itype.lower().replace(' ', '-')
-            grouped_sections += f"\n## {itype} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
+        for group_label, issues_in_group in grouped.items():
+            anchor = group_label.lower().replace(' ', '-')
+            grouped_sections += f"\n## {group_label} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
             grouped_sections += "| Key | Summary | Status | Assignee | Components | Project Category | Created | Updated | Age (days) | Link |\n"
             grouped_sections += "|---|---|---|---|---|---|---|---|---|---|\n"
-            for issue in group:
+            for issue in issues_in_group:
                 key = issue.get('key', '')
                 summary = safe_get(issue, ['fields', 'summary'], '')[:40]
                 status = safe_get(issue, ['fields', 'status', 'name'], '')
                 emoji = status_emoji(status)
                 assignee = safe_get(issue, ['fields', 'assignee', 'displayName'], '')
-                components = ', '.join([c['name'] for c in issue.get('fields', {}).get('components', [])])
+                components = ', '.join([component['name'] for component in issue.get('fields', {}).get('components', [])])
                 proj_cat = safe_get(issue, ['fields', 'project', 'projectCategory', 'name'], project_category)
                 created = safe_get(issue, ['fields', 'created'], '')
                 updated = safe_get(issue, ['fields', 'updated'], '')
@@ -172,7 +172,7 @@ def write_automated_doc_file(
         write_report(filename, report, context, filetype='md', feature='automated_documentation', item_name='Automated documentation report')
         info(f"📄 Automated documentation report written to {filename}", extra=context, feature='automated_documentation')
     except Exception as e:
-        error(REPORT_WRITE_ERROR.format(error=e), extra=context, feature='automated_documentation')
+        error(FAILED_TO.format(action='write report', error=e), extra=context, feature='automated_documentation')
 
 def generate_documentation(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -206,10 +206,8 @@ def automated_documentation(
     Returns:
         None. Writes a Markdown report to disk.
     """
-    import time
     correlation_id = params.get('correlation_id')
     context = build_context("automated_documentation", user_email, batch_index, unique_suffix, correlation_id=correlation_id)
-    start_time = time.time()
     try:
         contextual_log('info', f"📚 [Automated Documentation] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='automated_documentation')
         if not require_param(params, 'doc_type', context):

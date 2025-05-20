@@ -1,5 +1,5 @@
 import os
-from jirassicpack.utils.io import ensure_output_dir, info, spinner, get_option, prompt_text, prompt_select, feature_error_handler, write_report, safe_get, select_from_list
+from jirassicpack.utils.io import ensure_output_dir, info, spinner, get_option, prompt_text, prompt_select, feature_error_handler, write_report, safe_get, select_from_list, prompt_with_schema
 from jirassicpack.utils.logging import contextual_log
 import openai
 from datetime import datetime
@@ -107,8 +107,8 @@ def select_jira_issues(jira: Any) -> list:
             if not found:
                 info("No issues found. Try again or use another option.")
                 continue
-            choices = [(f"{issue.get('key','?')}: {issue.get('fields',{}).get('summary','?')}", issue.get('key','?')) for issue in found]
-            picked = select_from_list(choices, message="Select issues:", display_fn=lambda t: t[0], value_fn=lambda t: t[1], multi=True)
+            choices = [{"name": f"{issue.get('key','?')}: {issue.get('fields',{}).get('summary','?')}", "value": issue.get('key','?')} for issue in found]
+            picked = select_from_list(choices, message="Select issues:", multi=True)
             return picked or []
         elif method == "Pick from list":
             try:
@@ -119,8 +119,8 @@ def select_jira_issues(jira: Any) -> list:
             if not all_issues:
                 info("No issues found.")
                 continue
-            choices = [(f"{issue.get('key','?')}: {issue.get('fields',{}).get('summary','?')}", issue.get('key','?')) for issue in all_issues]
-            picked = select_from_list(choices, message="Select issues:", display_fn=lambda t: t[0], value_fn=lambda t: t[1], multi=True)
+            choices = [{"name": f"{issue.get('key','?')}: {issue.get('fields',{}).get('summary','?')}", "value": issue.get('key','?')} for issue in all_issues]
+            picked = select_from_list(choices, message="Select issues:", multi=True)
             return picked or []
 
 @feature_error_handler('ticket_discussion_summary')
@@ -162,12 +162,12 @@ def ticket_discussion_summary(
         acceptance_criteria = fields.get(ac_field, "")
         comments = safe_get(fields, ["comment", "comments"], [])
         comments_text = "\n\n".join([
-            f"{c.get('author', {}).get('displayName', 'Unknown')}: {c.get('body', '')}" for c in comments
+            f"{comment.get('author', {}).get('displayName', 'Unknown')}: {comment.get('body', '')}" for comment in comments
         ])
         # Extract GitHub PR links from description and comments
         pr_links = re.findall(r'https://github.com/[^\s)]+/pull/\d+', description)
-        for c in comments:
-            pr_links += re.findall(r'https://github.com/[^\s)]+/pull/\d+', c.get('body', ''))
+        for comment in comments:
+            pr_links += re.findall(r'https://github.com/[^\s)]+/pull/\d+', comment.get('body', ''))
         pr_links = list(set(pr_links))  # Deduplicate
         # --- Linked Pull Requests Section ---
         if not pr_links:
@@ -184,8 +184,8 @@ def ticket_discussion_summary(
             except Exception:
                 tech_summary = "(Failed to summarize technical/code changes via local LLM)"
         # --- Compose report sections ---
-        header = f"# 💬 Ticket Discussion Summary\n\n"
-        header += f"**Feature:** Ticket Discussion Summary  "
+        header = "# 💬 Ticket Discussion Summary\n\n"
+        header += "**Feature:** Ticket Discussion Summary  "
         header += f"**Issue Key:** {issue_key}  "
         header += f"**Created by:** {user_email}  "
         header += f"**Run at:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  "
@@ -269,15 +269,13 @@ def prompt_ticket_discussion_summary_options(opts: dict, jira: Any = None) -> di
 def prompt_ticket_discussion_options(opts: dict, jira: Any = None) -> dict:
     """
     Prompt for ticket discussion summary options using Marshmallow schema for validation.
-
     Args:
         opts (dict): Initial options/config dictionary.
         jira (Any, optional): Jira client for interactive selection.
-
     Returns:
         dict: Validated options for the feature, or None if aborted.
     """
-    schema = TicketDiscussionOptionsSchema()
+    schema = TicketDiscussionSummaryOptionsSchema()
     result = prompt_with_schema(schema, dict(opts), jira=jira, abort_option=True)
     if result == "__ABORT__":
         info("❌ Aborted ticket discussion summary prompt.")

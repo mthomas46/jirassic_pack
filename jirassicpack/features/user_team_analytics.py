@@ -25,7 +25,6 @@ def prompt_user_team_analytics_options(opts: Dict[str, Any], jira: Any = None) -
         Dict[str, Any]: Validated options for the feature.
     """
     info(f"[DEBUG] prompt_user_team_analytics_options called. jira is {'present' if jira else 'None'}. opts: {opts}")
-    config_team = opts.get('team')
     team = None
     users = []
     if not team and jira:
@@ -144,8 +143,8 @@ def user_team_analytics(
         team_stats["unresolved_ages"].extend(summary['unresolved_ages'])
         team_stats["self_assigned"] += summary['self_assigned']
         team_stats["assigned_by_others"] += summary['assigned_by_others']
-        for r, c in summary['reporters'].items():
-            team_stats["reporters"][r] = team_stats["reporters"].get(r, 0) + c
+        for reporter, count in summary['reporters'].items():
+            team_stats["reporters"][reporter] = team_stats["reporters"].get(reporter, 0) + count
     if not any(len(data["issues"]) for data in all_user_data.values()):
         info("🦖 See, Nobody Cares. No analytics data found.", extra=context, feature='user_team_analytics')
         contextual_log('info', "🦖 See, Nobody Cares. No analytics data found.", extra=context, feature='user_team_analytics')

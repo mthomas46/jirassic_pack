@@ -5,7 +5,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from jirassicpack.config import ConfigLoader
 from jirassicpack.jira_client import JiraClient
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, prompt_text, prompt_select, prompt_password, prompt_checkbox, log_entry_exit
+from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, prompt_text, prompt_select, prompt_password, prompt_checkbox, select_from_list
 from jirassicpack.utils.logging import contextual_log, redact_sensitive
 from jirassicpack.utils.jira import select_jira_user, select_account_id, select_property_key, search_issues
 from colorama import Fore, Style
@@ -352,7 +352,7 @@ def feature_menu():
             continue
         if group == "Batch mode: Run multiple features":
             # Multi-select features from all groups
-            all_features = [(f["emoji"] + " " + f["label"], f["key"]) for f in FEATURE_MANIFEST]
+            all_features = [{"name": f["emoji"] + " " + f["label"], "value": f["key"]} for f in FEATURE_MANIFEST]
             selected = select_from_list(all_features, message="Select features to run in batch mode (space to select, enter to confirm):", multi=True)
             if not selected:
                 continue
@@ -551,21 +551,18 @@ def main() -> None:
         # Show a single combined welcome panel
         user = None
         config_path = None
-        log_level = CLI_LOG_LEVEL
         if len(sys.argv) > 1:
             for arg in sys.argv:
                 if arg.startswith('--config='):
                     config_path = arg.split('=', 1)[1]
                 if arg.startswith('--log-level='):
-                    log_level = arg.split('=', 1)[1]
+                    arg.split('=', 1)[1]
         config = ConfigLoader(config_path)
         jira_conf = config.get_jira_config()
         user = jira_conf.get('email', 'User')
         panel_combined_welcome(user)
         rich_info(BANNER_ALT_TEXT)
         options = config.get_options()
-        features = getattr(config, 'config', {}).get('features')
-        feature = getattr(config, 'config', {}).get('feature')
         # Print loaded Jira config (redacted token)
         def redact_token(token):
             if not token or len(token) < 7:
@@ -603,7 +600,7 @@ def main() -> None:
                     continue
                 if action == "exit":
                     print(f"{JUNGLE_GREEN}Goodbye!{RESET}")
-                    contextual_log('info', f"🦖 [CLI] User exited from main menu.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
+                    contextual_log('info', "🦖 [CLI] User exited from main menu.", extra={"feature": "cli", "user": None, "batch": None, "suffix": None})
                     panel_nobody_cares()
                     rich_info("🦖 CLI halted. User exited from main menu.")
                     try:
@@ -653,10 +650,6 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         "🔎 Search issues": "search_issues",
         "📄 Ticket Discussion Summary": "ticket_discussion_summary",
         "👀 Live Tail Local LLM Logs": "live_tail_local_llm_logs",
-        "🏷️ Output all user property keys": "output_all_user_property_keys",
-        "🔎 Search issues": "search_issues",
-        "📄 Ticket Discussion Summary": "ticket_discussion_summary",
-        "👀 Live Tail Local LLM Logs": "live_tail_local_llm_logs",
         "🪵 View Ollama Server Log": "view_ollama_server_log",
         "👀 Live Tail Ollama Server Log": "live_tail_ollama_server_log",
         "🔍 Search Ollama Server Log": "search_ollama_server_log",
@@ -677,7 +670,7 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         test_connection(jira, options, context)
         return
     if key == "output_all_users":
-        contextual_log('info', f"{feature_tag} Outputting all users. Options: {redact_sensitive(options)} {context}", extra=context)
+        contextual_log('info', f"{feature_tag} Outputting all users. Options: {redact_sensitive(options)}", extra=context)
         output_all_users(jira, options, options.get('unique_suffix', ''))
         return
     if key == "output_all_user_property_keys":
@@ -784,7 +777,7 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
             # Check for HTTP error code if available
             msg = str(e)
             if ("400" in msg or "404" in msg or "Bad Request" in msg or "not found" in msg.lower()):
-                error_msg = f"🦖 The 'mypreferences' endpoint is not supported on your Jira instance. (Jira Cloud does not support this endpoint.)"
+                error_msg = "🦖 The 'mypreferences' endpoint is not supported on your Jira instance. (Jira Cloud does not support this endpoint.)"
                 print(DANGER_RED + error_msg + RESET)
                 contextual_log('error', f"🦖 [CLI] {error_msg} Exception: {e}", exc_info=True, extra=context)
             else:
@@ -868,10 +861,10 @@ def run_feature(feature: str, jira: JiraClient, options: dict, user_email: str =
         sig = inspect.signature(prompt_func)
         contextual_log('debug', f"[DEBUG] prompt_func signature: {sig}", extra=context)
         if 'jira' in sig.parameters:
-            contextual_log('debug', f"[DEBUG] Calling prompt_func with jira", extra=context)
+            contextual_log('debug', "[DEBUG] Calling prompt_func with jira", extra=context)
             params = prompt_func(options, jira=jira)
         else:
-            contextual_log('debug', f"[DEBUG] Calling prompt_func without jira", extra=context)
+            contextual_log('debug', "[DEBUG] Calling prompt_func without jira", extra=context)
             params = prompt_func(options)
         contextual_log('debug', f"[DEBUG] prompt_func returned params: {params}", extra=context)
         if not params:
@@ -895,10 +888,9 @@ def test_connection(jira: JiraClient, options: dict = None, context: str = "") -
             contextual_log('info', f"🦖 [CLI] [test_connection] Parameters: url={jira.base_url}, email={jira.auth[0]}", extra=context)
             # Log full request details
             endpoint = 'myself'
-            headers = jira.headers
             params = None
             contextual_log('info', f"🦖 [CLI] [test_connection] Request: endpoint={endpoint}, headers=REDACTED, params={params}", extra=context)
-            contextual_log('info', f"🦖 [CLI] [test_connection] Starting Jira connection test.", extra=context)
+            contextual_log('info', "🦖 [CLI] [test_connection] Starting Jira connection test.", extra=context)
             user = jira.get(endpoint)
             contextual_log('info', f"🦖 [CLI] [test_connection] Response: {user}", extra=context)
             contextual_log('info', f"🦖 [CLI] [test_connection] Jira connection successful for user {user.get('displayName', user.get('name', 'Unknown'))}", extra=context)
@@ -910,7 +902,6 @@ def test_connection(jira: JiraClient, options: dict = None, context: str = "") -
             error(FAILED_TO.format(action='connect to Jira', error=e), extra=context)
 
 def output_all_users(jira: JiraClient, options: dict, unique_suffix: str = "") -> None:
-    context = {"feature": "output_all_users", "user": None, "batch": None, "suffix": unique_suffix}
     output_dir = options.get('output_dir', 'output')
     ensure_output_dir(output_dir)
     with spinner("Fetching users from Jira..."):
@@ -1097,11 +1088,10 @@ def start_local_llm_server():
 def stop_local_llm_server():
     info("🛑 Stopping local LLM server...")
     # Try health check, but proceed regardless of result
-    health_running = False
     try:
         resp = requests.get("http://localhost:5000/health", timeout=2)
         if resp.status_code == 200:
-            health_running = True
+            pass
     except Exception:
         pass
     try:
@@ -1226,8 +1216,6 @@ def live_tail_local_llm_logs():
     ollama_log = os.path.expanduser("~/.ollama/ollama.log")
     ollama_dir = os.path.abspath(os.path.join(os.getcwd(), "../Ollama7BPoc"))
     http_api_log = os.path.join(ollama_dir, "llm_api.log")
-    threads = []
-    stop_event = threading.Event()
     def tail1():
         try:
             live_tail_file(ollama_log, "ollama.log")
@@ -1254,7 +1242,7 @@ def live_tail_local_llm_logs():
 
 def view_ollama_server_log():
     log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
-    print(f"--- ollama_server.log (last 40 lines) ---")
+    print("--- ollama_server.log (last 40 lines) ---")
     try:
         with open(log_path, 'r') as f:
             lines = f.readlines()
@@ -1267,7 +1255,7 @@ def view_ollama_server_log():
 def live_tail_ollama_server_log():
     import time
     log_path = "/Users/mykalthomas/Documents/work/Ollama7BPoc/ollama_server.log"
-    print(f"--- Live tailing ollama_server.log (Ctrl+C to stop) ---")
+    print("--- Live tailing ollama_server.log (Ctrl+C to stop) ---")
     try:
         with open(log_path, 'r') as f:
             f.seek(0, 2)

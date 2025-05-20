@@ -4,15 +4,15 @@
 
 from jirassicpack.utils.io import ensure_output_dir, celebrate_success, retry_or_skip, info, feature_error_handler, spinner, info_spared_no_expense
 from jirassicpack.utils.logging import contextual_log, redact_sensitive
-from jirassicpack.utils.io import error, info_spared_no_expense
+from jirassicpack.utils.io import error, write_report
 from jirassicpack.utils.logging import build_context
 from typing import Any
 import time
 from marshmallow import fields
 from jirassicpack.utils.fields import IssueKeyField, BaseOptionsSchema, validate_nonempty
 from jirassicpack.utils.io import prompt_with_schema
-from jirassicpack.constants import SEE_NOBODY_CARES
 from jirassicpack.analytics.helpers import build_report_sections
+from jirassicpack.constants import FAILED_TO
 
 class UpdateIssueOptionsSchema(BaseOptionsSchema):
     issue_key = IssueKeyField(required=True, error_messages={"required": "Issue key is required."})
@@ -65,18 +65,17 @@ def update_issue(
     contextual_log('info', f"🦕 [Update Issue] Starting feature for user '{user_email}' with params: {redact_sensitive(params)} (suffix: {unique_suffix})", operation="feature_start", params=redact_sensitive(params), extra=context, feature='update_issue')
     issue_key = params.get('issue_key')
     if not issue_key:
-        error(IS_REQUIRED.format(field='issue_key'), extra=context)
+        error(FAILED_TO.format(field='issue_key'), extra=context)
         contextual_log('error', "🦕 [Update Issue] Issue key is required but missing.", operation="validation", status="error", extra=context, feature='update_issue')
         return
     field = params.get('field')
     if not field:
-        error(IS_REQUIRED.format(field='field'), extra=context)
+        error(FAILED_TO.format(field='field'), extra=context)
         contextual_log('error', "🦕 [Update Issue] Field is required but missing.", operation="validation", status="error", extra=context, feature='update_issue')
         return
     value = params.get('value')
     if not value:
-        from jirassicpack.constants import IS_REQUIRED
-        error(IS_REQUIRED.format(field='value'), extra=context)
+        error(FAILED_TO.format(field='value'), extra=context)
         contextual_log('error', "🦕 [Update Issue] Value is required but missing.", operation="validation", status="error", extra=context, feature='update_issue')
         return
     output_dir = params.get('output_dir', 'output')
@@ -86,7 +85,7 @@ def update_issue(
     orig_update_issue = getattr(jira, 'update_issue', None)
     if orig_update_issue:
         def log_update_issue(*args, **kwargs):
-            contextual_log('debug', f"🦕 [Update Issue] Jira update_issue called with args and redacted kwargs.", extra=context, feature='update_issue')
+            contextual_log('debug', "🦕 [Update Issue] Jira update_issue called with args and redacted kwargs.", extra=context, feature='update_issue')
             resp = orig_update_issue(*args, **kwargs)
             contextual_log('debug', f"🦕 [Update Issue] Jira update_issue response: {redact_sensitive(resp)}", extra=context, feature='update_issue')
             return resp
@@ -108,8 +107,10 @@ def update_issue(
     details_section = ""
     if result:
         details_section = "| Field | Value |\n|-------|-------|\n"
-        for k, v in (result.items() if isinstance(result, dict) else []):
-            details_section += f"| {k} | {v} |\n"
+        for field_name, field_value in (result.items() if isinstance(result, dict) else []):
+            details_section += f"| {field_name} | {field_value} |\n"
+    header = f"# Update Issue Report\n\nIssue Key: {issue_key}\nField: {field}"
+    action_items = ""  # No specific action items for update issue
     report = build_report_sections({
         'header': header,
         'summary': summary_section,

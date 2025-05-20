@@ -68,7 +68,7 @@ def create_issue(
     orig_create_issue = getattr(jira, 'create_issue', None)
     if orig_create_issue:
         def log_create_issue(*args, **kwargs):
-            contextual_log('debug', f"🦖 [Create Issue] Jira create_issue called with args and redacted kwargs.", extra=context, feature='create_issue')
+            contextual_log('debug', "🦖 [Create Issue] Jira create_issue called with args and redacted kwargs.", extra=context, feature='create_issue')
             resp = orig_create_issue(*args, **kwargs)
             contextual_log('debug', f"🦖 [Create Issue] Jira create_issue response: {redact_sensitive(resp)}", extra=context, feature='create_issue')
             return resp
@@ -107,8 +107,8 @@ def create_issue(
     base_url = jira_conf['url'].rstrip('/')
     created_at = datetime.now().strftime('%Y-%m-%d %H:%M')
     link = f"{base_url}/browse/{issue.get('key', 'N/A')}"
-    header = f"# 📝 Create Issue Report\n\n"
-    header += f"**Feature:** Create Issue  "
+    header = "# 📝 Create Issue Report\n\n"
+    header += "**Feature:** Create Issue  "
     header += f"**Issue Key:** [{issue.get('key', 'N/A')}]({link})  "
     header += f"**Project:** {issue.get('fields', {}).get('project', {}).get('key', 'N/A')}  "
     header += f"**Type:** {issue.get('fields', {}).get('issuetype', {}).get('name', 'N/A')}  "
@@ -131,8 +131,8 @@ def create_issue(
         ("Created", issue.get('fields', {}).get('created', '')),
         ("Updated", issue.get('fields', {}).get('updated', '')),
     ]
-    for k, v in fields:
-        summary_table += f"| {k} | {v} |\n"
+    for field_name, field_value in fields:
+        summary_table += f"| {field_name} | {field_value} |\n"
     summary_table += "\n---\n\n"
     action_items = "## Action Items\n"
     status = issue.get('fields', {}).get('status', {}).get('name', '').lower()
@@ -147,8 +147,8 @@ def create_issue(
     related_links = f"## Related Links\n- [View in Jira]({link})\n- [Project Dashboard]({base_url}/projects)\n"
     grouped_section = "## Issue Details\n\n"
     grouped_section += "| Field | Value |\n|---|---|\n"
-    for k, v in fields:
-        grouped_section += f"| {k} | {v} |\n"
+    for field_name, field_value in fields:
+        grouped_section += f"| {field_name} | {field_value} |\n"
     grouped_section += "\n---\n\n"
     grouped_section += f"- [View in Jira]({link})\n"
     if issue:

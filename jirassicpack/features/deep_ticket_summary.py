@@ -64,7 +64,7 @@ def deep_ticket_summary(
     labels = ', '.join(fields.get('labels', []))
     project = safe_get(fields, ["project", "key"], "N/A")
     # --- Compose report sections ---
-    header = f"# 🦖 Deep Ticket Summary\n\n"
+    header = "# 🦖 Deep Ticket Summary\n\n"
     header += f"**Key:** {issue_key}  "
     header += f"**Project:** {project}  "
     header += f"**Type:** {issue_type}  "
@@ -98,10 +98,10 @@ def deep_ticket_summary(
     # Comments Section
     comments_section = ""
     if comments:
-        for c in comments:
-            author = c.get('author', {}).get('displayName', 'Unknown')
-            body = c.get('body', '')
-            created_c = c.get('created', '')
+        for comment in comments:
+            author = comment.get('author', {}).get('displayName', 'Unknown')
+            body = comment.get('body', '')
+            created_c = comment.get('created', '')
             comments_section += f"- **{author}** ({created_c}): {body}\n"
     else:
         comments_section = "_No comments found._\n"
@@ -112,10 +112,10 @@ def deep_ticket_summary(
             author = entry.get('author', {}).get('displayName', 'Unknown')
             created_e = entry.get('created', '')
             items = entry.get('items', [])
-            for item in items:
-                field = item.get('field', '')
-                from_val = item.get('fromString', '')
-                to_val = item.get('toString', '')
+            for change_item in items:
+                field = change_item.get('field', '')
+                from_val = change_item.get('fromString', '')
+                to_val = change_item.get('toString', '')
                 changelog_section += f"- **{author}** ({created_e}): Changed **{field}** from '{from_val}' to '{to_val}'\n"
     else:
         changelog_section = "_No changelog entries found._\n"

@@ -4,10 +4,9 @@ metrics.py
 Gathers and reports metrics for Jira issues, including grouping by type and summary statistics. Provides interactive prompts for user/date selection and outputs professional Markdown reports. Used for analytics and reporting features in Jirassic Pack CLI.
 """
 import os
-from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_date, safe_get, require_param, make_output_filename
+from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_option, validate_date, safe_get, require_param, make_output_filename, write_report
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user
-import time
 from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
 from typing import Any
@@ -145,9 +144,9 @@ def gather_metrics(
         # (Assignee info may not be present in all issues, so skip if not)
         # Grouped issue sections
         grouped_sections = ""
-        for itype, group in grouped.items():
-            grouped_sections += f"\n## {itype} Issues\n| Key | Summary | Status | Resolved |\n|-----|---------|--------|----------|\n"
-            for issue in group:
+        for group_label, issues_in_group in grouped.items():
+            grouped_sections += f"\n## {group_label} Issues\n| Key | Summary | Status | Resolved |\n|-----|---------|--------|----------|\n"
+            for issue in issues_in_group:
                 key = issue.get('key', 'N/A')
                 summary_ = safe_get(issue, ['fields', 'summary'])
                 status = safe_get(issue, ['fields', 'status', 'name'])
@@ -165,7 +164,6 @@ def gather_metrics(
         content = build_report_sections(sections)
         write_report(filename, content, context, filetype='md', feature='gather_metrics', item_name='Metrics report')
         info(f"🦖 Metrics report written to {filename}")
-        duration = int((time.time() - context.get('start_time', 0)) * 1000) if context.get('start_time') else None
         contextual_log('info', f"📈 [Gather Metrics] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}).", operation="feature_end", status="success", params=redact_sensitive(params), extra=context, feature='gather_metrics')
     except KeyboardInterrupt:
         contextual_log('warning', "📈 [Gather Metrics] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context, feature='gather_metrics')

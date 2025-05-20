@@ -60,14 +60,14 @@ def bulk_operations(
     orig_update_issue = getattr(jira, 'update_issue', None)
     if orig_create_issue:
         def log_create_issue(*args, **kwargs):
-            contextual_log('debug', f"🦴 [Bulk Operations] Jira create_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
+            contextual_log('debug', "🦴 [Bulk Operations] Jira create_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
             resp = orig_create_issue(*args, **kwargs)
             contextual_log('debug', f"🦴 [Bulk Operations] Jira create_issue response: {redact_sensitive(resp)}", extra=context, feature='bulk_operations')
             return resp
         jira.create_issue = log_create_issue
     if orig_update_issue:
         def log_update_issue(*args, **kwargs):
-            contextual_log('debug', f"🦴 [Bulk Operations] Jira update_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
+            contextual_log('debug', "🦴 [Bulk Operations] Jira update_issue called with args and redacted kwargs.", extra=context, feature='bulk_operations')
             resp = orig_update_issue(*args, **kwargs)
             contextual_log('debug', f"🦴 [Bulk Operations] Jira update_issue response: {redact_sensitive(resp)}", extra=context, feature='bulk_operations')
             return resp
@@ -137,8 +137,10 @@ def bulk_operations(
         for key, status, err in summary:
             details_section += f"| {key} | {status} | {err} |\n"
     else:
-        for r in results:
-            details_section += f"| {r} |  |  |\n"
+        for result in results:
+            details_section += f"| {result} |  |  |\n"
+    header = f"# Bulk Operations Report\n\nAction: {action}\nJQL: {jql}"
+    action_items = ""  # No specific action items for bulk ops
     report = build_report_sections({
         'header': header,
         'summary': summary_section,

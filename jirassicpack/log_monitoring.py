@@ -156,9 +156,9 @@ def batch_run_success_failure(logs):
             pass
     # Prepare table
     table = []
-    for cid, stats in batch_stats.items():
-        duration = (stats['end'] - stats['start']).total_seconds() if stats['start'] and stats['end'] else None
-        table.append([cid, stats['success'], stats['failure'], duration])
+    for correlation_id, batch_stat in batch_stats.items():
+        duration = (batch_stat['end'] - batch_stat['start']).total_seconds() if batch_stat['start'] and batch_stat['end'] else None
+        table.append([correlation_id, batch_stat['success'], batch_stat['failure'], duration])
     return table
 
 
@@ -178,11 +178,11 @@ def batch_run_time_analytics(logs):
                 times[cid]['end'] = dt
         except Exception:
             pass
-    durations = [(cid, (v['end'] - v['start']).total_seconds() if v['start'] and v['end'] else None) for cid, v in times.items()]
+    durations = [(correlation_id, (time_info['end'] - time_info['start']).total_seconds() if time_info['start'] and time_info['end'] else None) for correlation_id, time_info in times.items()]
     if durations:
-        avg = sum(d for _, d in durations if d is not None) / max(1, len([d for _, d in durations if d is not None]))
-        min_d = min((d for _, d in durations if d is not None), default=None)
-        max_d = max((d for _, d in durations if d is not None), default=None)
+        avg = sum(duration for _, duration in durations if duration is not None) / max(1, len([duration for _, duration in durations if duration is not None]))
+        min_d = min((duration for _, duration in durations if duration is not None), default=None)
+        max_d = max((duration for _, duration in durations if duration is not None), default=None)
     else:
         avg = min_d = max_d = None
     return durations, avg, min_d, max_d

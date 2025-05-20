@@ -193,7 +193,7 @@ class JiraClient:
         :return: Redacted data
         """
         if isinstance(data, dict):
-            return {k: self.redact_sensitive(v) for k, v in data.items()}
+            return {key: self.redact_sensitive(value) for key, value in data.items()}
         elif isinstance(data, list):
             return [self.redact_sensitive(item) for item in data]
         elif isinstance(data, str):

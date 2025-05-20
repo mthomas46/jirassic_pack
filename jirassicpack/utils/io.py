@@ -175,7 +175,6 @@ def prompt_path(message, **kwargs):
 prompt_path = log_entry_exit(prompt_path)
 
 def print_section_header(title: str, feature_key: Optional[str] = None) -> None:
-    color = FEATURE_COLORS.get(feature_key, EARTH_BROWN)
     art = FEATURE_ASCII_ART.get(feature_key, '')
     try:
         header = pyfiglet.figlet_format(title, font="mini")
@@ -264,9 +263,9 @@ def progress_bar(iterable, desc="Progress"):
         transient=True,
     ) as progress:
         task = progress.add_task(desc, total=total)
-        for i, item in enumerate(iterable, 1):
-            progress.update(task, completed=i)
-            yield item
+        for index, element in enumerate(iterable, 1):
+            progress.update(task, completed=index)
+            yield element
 progress_bar = log_entry_exit(progress_bar)
 
 def error(message, extra=None, feature=None):
@@ -492,7 +491,7 @@ def select_with_pagination_and_fuzzy(choices, message="Select an item:", page_si
                 page = int(prompt_text("Enter page number:", default=str(page+1))) - 1
             elif selection == "🔤 Jump to letter":
                 letter = prompt_text("Type a letter to jump:")
-                idx = next((i for i, c in enumerate(choices) if c.lower().startswith(letter.lower())), None)
+                idx = next((index for index, choice in enumerate(choices) if choice.lower().startswith(letter.lower())), None)
                 if idx is not None:
                     page = idx // page_size
                 else:
@@ -528,7 +527,7 @@ def make_output_filename(feature, params, output_dir='output', ext='md'):
         if k in ("user", "username", "assignee") and isinstance(v, str):
             v = v.lower().replace(' ', '_')
         return sanitize(v)
-    param_str = '_'.join(f"{sanitize(k)}-{prettify_param(k, v)}" for k, v in params if v)
+    param_str = '_'.join(f"{sanitize(param_key)}-{prettify_param(param_key, param_value)}" for param_key, param_value in params if param_value)
     date_str = datetime.now().strftime('%m-%d-%y')
     parts = [feature]
     if param_str:
@@ -719,9 +718,9 @@ def safe_get(dct, keys, default=None):
         The value at the nested key, or default if not found.
     """
     val = dct
-    for k in keys:
-        if isinstance(val, dict) and k in val:
-            val = val[k]
+    for key in keys:
+        if isinstance(val, dict) and key in val:
+            val = val[key]
         else:
             return default
     return val
@@ -746,6 +745,10 @@ def _select_from_list(
     allow_abort=True,
     style=DEFAULT_PROMPT_STYLE
 ):
+    """
+    Always returns only serializable values (e.g., str, int) for both single and multi-select.
+    For multi-select, returns a list of values. For single-select, returns a value.
+    """
     display_fn = display_fn or (lambda x: str(x))
     # If items are dicts with 'name' and 'value', use questionary.Choice
     if items and isinstance(items[0], dict) and 'name' in items[0] and 'value' in items[0]:
@@ -762,6 +765,7 @@ def _select_from_list(
             picked = [p.value for p in picked]
         if allow_abort and abort_label in picked:
             return None
+        # Always return a list of serializable values
         if items and isinstance(items[0], dict) and 'name' in items[0] and 'value' in items[0]:
             return picked
         return [items[choices.index(p)] for p in picked if p != abort_label]
@@ -769,19 +773,19 @@ def _select_from_list(
         # If choices are Choice objects, use their titles for display
         display_map = {}
         display_choices = []
-        for c in choices:
-            if isinstance(c, Choice):
-                display_map[c.title] = c.value
-                display_choices.append(c.title)
+        for choice in choices:
+            if isinstance(choice, Choice):
+                display_map[choice.title] = choice.value
+                display_choices.append(choice.title)
             else:
-                display_map[c] = c
-                display_choices.append(c)
+                display_map[choice] = choice
+                display_choices.append(choice)
         if allow_abort and abort_label not in display_choices:
             display_choices.append(abort_label)
         picked = inquirer.fuzzy(message=message, choices=display_choices, max_height="70%", style=INQUIRERPY_STYLE).execute()
         if allow_abort and picked == abort_label:
             return None
-        # Map back to the value
+        # Always return the value (serializable)
         return display_map.get(picked, picked)
     elif len(choices) > page_size:
         page = 0
@@ -810,7 +814,7 @@ def _select_from_list(
                 page = int(prompt_text("Enter page number:", default=str(page+1))) - 1
             elif selection == "🔤 Jump to letter":
                 letter = prompt_text("Type a letter to jump:")
-                idx = next((i for i, c in enumerate(choices) if isinstance(c, str) and c.lower().startswith(letter.lower())), None)
+                idx = next((index for index, choice in enumerate(choices) if isinstance(choice, str) and choice.lower().startswith(letter.lower())), None)
                 if idx is not None:
                     page = idx // page_size
                 else:
@@ -818,6 +822,7 @@ def _select_from_list(
             elif allow_abort and selection == abort_label:
                 return None
             else:
+                # Always return the value (serializable)
                 if items and isinstance(items[0], dict) and 'name' in items[0] and 'value' in items[0]:
                     return selection
                 return items[choices.index(selection)]
@@ -827,6 +832,7 @@ def _select_from_list(
             picked = picked.value
         if allow_abort and picked == abort_label:
             return None
+        # Always return the value (serializable)
         if items and isinstance(items[0], dict) and 'name' in items[0] and 'value' in items[0]:
             return picked
         return items[choices.index(picked)]

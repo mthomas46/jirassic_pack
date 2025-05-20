@@ -29,8 +29,6 @@ def aggregate_issue_stats(issues):
     blockers = []
     critical = []
     blocked = []
-    self_assigned = 0
-    assigned_by_others = 0
     linked = 0
     blocking = []
     blocked_by = []
@@ -45,7 +43,6 @@ def aggregate_issue_stats(issues):
         priority = fields.get('priority', {}).get('name', 'N/A')
         priority_counts[priority] = priority_counts.get(priority, 0) + 1
         created = fields.get('created')
-        updated = fields.get('updated')
         resolved = fields.get('resolutiondate')
         reporter = fields.get('reporter', {}).get('displayName', 'N/A')
         reporters[reporter] = reporters.get(reporter, 0) + 1
@@ -54,8 +51,6 @@ def aggregate_issue_stats(issues):
             created_count += 1
         if resolved:
             resolved_count += 1
-        # Self-assigned vs assigned by others
-        # (feature-specific logic may override this)
         # Issue age buckets (unresolved only)
         if not resolved and created:
             age_days = (today - datetime.strptime(created[:10], "%Y-%m-%d")).days
@@ -69,7 +64,7 @@ def aggregate_issue_stats(issues):
         # Blockers/critical
         if priority in ["Blocker", "Highest", "Critical"]:
             critical.append(issue.get('key'))
-        if status.lower() == "blocked" or "blocked" in [l.lower() for l in fields.get('labels', [])]:
+        if status.lower() == "blocked" or "blocked" in [label.lower() for label in fields.get('labels', [])]:
             blocked.append(issue.get('key'))
         # Linked issues
         links = fields.get('issuelinks', [])
@@ -151,14 +146,6 @@ def make_summary_section(stats):
         lines.append(f"**Created in period:** {stats['created']}")
         lines.append(f"**Resolved in period:** {stats['resolved']}")
         lines.append(f"**Resolved/Created ratio:** {stats['created_vs_resolved']}")
-    if 'self_assigned' in stats and 'assigned_by_others' in stats:
-        lines.append(f"**Self-assigned:** {stats['self_assigned']} | **Assigned by others:** {stats['assigned_by_others']}")
-    if 'linked' in stats:
-        lines.append(f"**Issues with links:** {stats['linked']}")
-    if 'critical' in stats:
-        lines.append(f"**Blockers/Critical:** {len(stats['critical'])}")
-    if 'blocked' in stats:
-        lines.append(f"**Blocked:** {len(stats['blocked'])}")
     if 'oldest' in stats and stats['oldest'] != 'N/A':
         lines.append(f"**Oldest unresolved:** {stats['oldest']}")
     if 'avg_unresolved_age' in stats and stats['avg_unresolved_age'] != 'N/A':
@@ -195,8 +182,8 @@ def make_breakdown_section(breakdown_dict, title):
         str: Markdown section as a string.
     """
     section = f"### {title}\n"
-    for k, v in breakdown_dict.items():
-        section += f"- {k}: {v}\n"
+    for key, value in breakdown_dict.items():
+        section += f"- {key}: {value}\n"
     return section
 
 def make_reporter_section(reporters_dict, title="Top Reporters"):
@@ -209,8 +196,8 @@ def make_reporter_section(reporters_dict, title="Top Reporters"):
         str: Markdown section as a string.
     """
     section = f"## {title}\n"
-    for r, c in sorted(reporters_dict.items(), key=lambda x: -x[1]):
-        section += f"- {r}: {c}\n"
+    for reporter, count in sorted(reporters_dict.items(), key=lambda item: -item[1]):
+        section += f"- {reporter}: {count}\n"
     return section
 
 def group_issues_by_field(issues, field_path, default_label="Other"):
@@ -224,14 +211,14 @@ def group_issues_by_field(issues, field_path, default_label="Other"):
         dict: {group_label: [issues]}
     """
     from collections import defaultdict
-    def get_field(issue, path, default):
-        val = issue
-        for key in path:
-            if isinstance(val, dict):
-                val = val.get(key, default)
+    def get_field(issue, field_path, default):
+        current_value = issue
+        for key in field_path:
+            if isinstance(current_value, dict):
+                current_value = current_value.get(key, default)
             else:
                 return default
-        return val if val is not None else default
+        return current_value if current_value is not None else default
     grouped = defaultdict(list)
     for issue in issues:
         label = get_field(issue, field_path, default_label)

@@ -8,14 +8,10 @@ from jirassicpack.utils.io import ensure_output_dir, spinner, error, info, get_o
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from jirassicpack.utils.jira import select_jira_user
 from datetime import datetime
-import time
 from marshmallow import Schema, fields, ValidationError
 from jirassicpack.utils.rich_prompt import rich_error
 from typing import Any
 from jirassicpack.analytics.helpers import build_report_sections, group_issues_by_field, make_top_n_list
-import logging
-import traceback
-from functools import wraps
 
 def prompt_summarize_tickets_options(options: dict, jira: Any = None) -> dict:
     """
@@ -216,17 +212,17 @@ def summarize_tickets(
                 # Group by selected field (now using helper)
                 grouped = group_issues_by_field(issues, grouping_path, f"Other {grouping_label}")
                 # Build sections using helpers
-                header = f"# 🗂️ Ticket Summary Report\n\n"
-                header += f"**Feature:** Summarize Tickets  "
+                header = "# 🗂️ Ticket Summary Report\n\n"
+                header += "**Feature:** Summarize Tickets  "
                 header += f"**User:** {display_name} ({account_id})  "
                 header += f"**Timeframe:** {start_date} to {end_date}  "
                 header += f"**Total issues completed:** {total_issues}  "
                 header += f"**Grouped by:** {grouping_label}  "
                 header += "\n\n---\n\n"
-                toc = "## Table of Contents\n" + "\n".join(f"- [{group_val}](#{str(group_val).lower().replace(' ', '-').replace('/', '-')}-issues)" for group_val in grouped) + "\n"
-                summary_table = f"| {grouping_label} | Count |\n|---|---|\n" + "\n".join(f"| {group_val} | {len(group)} |" for group_val, group in grouped.items()) + "\n---\n\n"
+                toc = "## Table of Contents\n" + "\n".join(f"- [{group_label}](#{str(group_label).lower().replace(' ', '-').replace('/', '-')}-issues)" for group_label in grouped) + "\n"
+                summary_table = f"| {grouping_label} | Count |\n|---|---|\n" + "\n".join(f"| {group_label} | {len(issues_in_group)} |" for group_label, issues_in_group in grouped.items()) + "\n---\n\n"
                 # Action items
-                not_resolved = [i for group in grouped.values() for i in group if safe_get(i, ['fields', 'status', 'name'], '').lower() not in ['done', 'closed', 'resolved']]
+                not_resolved = [issue for issues_in_group in grouped.values() for issue in issues_in_group if safe_get(issue, ['fields', 'status', 'name'], '').lower() not in ['done', 'closed', 'resolved']]
                 action_items = "## Action Items\n"
                 if not_resolved:
                     action_items += "### Not Resolved\n"
@@ -238,7 +234,7 @@ def summarize_tickets(
                 else:
                     action_items += "All summarized tickets are resolved.\n"
                 # Top N lists
-                assignees = [safe_get(i, ['fields', 'assignee', 'displayName'], '') for group in grouped.values() for i in group]
+                assignees = [safe_get(issue, ['fields', 'assignee', 'displayName'], '') for issues_in_group in grouped.values() for issue in issues_in_group]
                 from collections import Counter
                 top_assignees = Counter(assignees).most_common(5)
                 top_n_lists = make_top_n_list(top_assignees, "Top 5 Assignees")
@@ -246,11 +242,11 @@ def summarize_tickets(
                 related_links = "## Related Links\n- [Jira Dashboard](https://your-domain.atlassian.net)\n"
                 # Grouped issue sections
                 grouped_sections = ""
-                for itype, group in grouped.items():
-                    anchor = str(itype).lower().replace(' ', '-')
-                    grouped_sections += f"\n## {itype} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
+                for group_label, issues_in_group in grouped.items():
+                    anchor = str(group_label).lower().replace(' ', '-')
+                    grouped_sections += f"\n## {group_label} Issues\n<a name=\"{anchor}-issues\"></a>\n\n"
                     grouped_sections += "| Key | Summary | Status | Resolved |\n|---|---|---|---|\n"
-                    for issue in group:
+                    for issue in issues_in_group:
                         key = issue.get('key', 'N/A')
                         summary = safe_get(issue, ['fields', 'summary'], '')[:40]
                         status = safe_get(issue, ['fields', 'status', 'name'], '')
@@ -284,7 +280,6 @@ def summarize_tickets(
                 contextual_log('error', f"[summarize_tickets][FULL REPORT] Exception occurred: {e}", exc_info=True, operation="write_report", error_type=type(e).__name__, status="error", params=redact_sensitive(params), extra=context, feature='summarize_tickets')
                 error(f"[summarize_tickets][FULL REPORT] Exception: {e}\n{traceback.format_exc()}", extra=context, feature='summarize_tickets')
                 raise
-        duration = int((time.time() - context.get('start_time', 0)) * 1000) if context.get('start_time') else None
         contextual_log('info', f"📝 [Summarize Tickets] Feature completed successfully for user '{user_email}' (suffix: {unique_suffix}).", operation="feature_end", status="success", params=redact_sensitive(params), extra=context, feature='summarize_tickets')
     except KeyboardInterrupt:
         contextual_log('warning', "📝 [Summarize Tickets] Graceful exit via KeyboardInterrupt.", operation="feature_end", status="interrupted", params=redact_sensitive(params), extra=context, feature='summarize_tickets')

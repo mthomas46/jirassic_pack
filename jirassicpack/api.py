@@ -39,7 +39,7 @@ def update_ticket(issue_id):
     """
     data = request.json
     try:
-        resp = jira.put(f"issue/{issue_id}", json=data)
+        jira.put(f"issue/{issue_id}", json=data)
         return jsonify({"status": "updated", "issue_id": issue_id}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 400

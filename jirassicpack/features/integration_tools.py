@@ -74,8 +74,8 @@ def generate_integration_links(issues: List[Dict[str, Any]]) -> List[Tuple[str, 
         comments = safe_get(issue, ['fields', 'comment', 'comments'], [])
         for match in re.findall(r'https://github.com/[^\s)]+', desc):
             pr_links.append((key, match))
-        for c in comments:
-            for match in re.findall(r'https://github.com/[^\s)]+', safe_get(c, ['body'], '')):
+        for comment in comments:
+            for match in re.findall(r'https://github.com/[^\s)]+', safe_get(comment, ['body'], '')):
                 pr_links.append((key, match))
     return pr_links
 

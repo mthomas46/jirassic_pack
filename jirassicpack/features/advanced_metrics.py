@@ -2,7 +2,6 @@
 # This feature calculates advanced metrics for Jira issues, such as cycle time and lead time, for a given user and timeframe.
 # It prompts for user, start/end dates, fetches completed issues, and outputs a Markdown report with a metrics table.
 
-from datetime import datetime
 from jirassicpack.utils.io import ensure_output_dir, spinner, info, make_output_filename, feature_error_handler, safe_get, validate_date, error, require_param, prompt_with_schema, write_report
 from jirassicpack.utils.logging import contextual_log, redact_sensitive, build_context
 from typing import Any
@@ -104,26 +103,11 @@ def advanced_metrics(
             return
         # Try to get display name/accountId for header
         display_name = user
-        account_id = user
         try:
             user_obj = jira.get_user(account_id=user)
             display_name = user_obj.get('displayName', user)
-            account_id = user_obj.get('accountId', user)
         except Exception:
             pass
-        from jirassicpack.config import ConfigLoader
-        jira_conf = ConfigLoader().get_jira_config()
-        base_url = jira_conf['url'].rstrip('/')
-        run_at = datetime.now().strftime('%Y-%m-%d %H:%M')
-        # Order by issue key
-        issues = sorted(issues, key=lambda i: i.get('key', ''))
-        # Group by issue type
-        grouped = defaultdict(list)
-        for issue in issues:
-            itype = safe_get(issue, ['fields', 'issuetype', 'name'], 'Other')
-            grouped[itype].append(issue)
-        # Try to get project category from first issue
-        project_category = safe_get(issues[0], ['fields', 'project', 'projectCategory', 'name'], 'N/A') if issues else 'N/A'
         # Aggregate stats
         stats = aggregate_issue_stats(issues)
         # Header
@@ -138,10 +122,14 @@ def advanced_metrics(
         # Top N reporters
         top_reporters = make_reporter_section(stats["reporters"], "Top Reporters")
         # Grouped issue sections
+        grouped = defaultdict(list)
+        for issue in issues:
+            group_label = safe_get(issue, ['fields', 'issuetype', 'name'], 'Other')
+            grouped[group_label].append(issue)
         grouped_sections = ""
-        for itype, group in grouped.items():
-            grouped_sections += f"\n## {itype} Issues\n| Key | Summary | Status | Resolved |\n|---|---|---|---|\n"
-            for issue in group:
+        for group_label, issues_in_group in grouped.items():
+            grouped_sections += f"\n## {group_label} Issues\n| Key | Summary | Status | Resolved |\n|---|---|---|---|\n"
+            for issue in issues_in_group:
                 key = issue.get('key', 'N/A')
                 summary_ = safe_get(issue, ['fields', 'summary'], '')
                 status = safe_get(issue, ['fields', 'status', 'name'], '')
