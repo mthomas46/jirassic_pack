@@ -143,9 +143,9 @@ def make_summary_section(stats):
     """
     lines = [f"**Total issues:** {stats.get('total', 0)}"]
     if 'created' in stats and 'resolved' in stats:
-        lines.append(f"**Created in period:** {stats['created']}")
-        lines.append(f"**Resolved in period:** {stats['resolved']}")
-        lines.append(f"**Resolved/Created ratio:** {stats['created_vs_resolved']}")
+        lines.append(f"**Created in period:** {stats.get('created', 0)}")
+        lines.append(f"**Resolved in period:** {stats.get('resolved', 0)}")
+        lines.append(f"**Resolved/Created ratio:** {stats.get('created_vs_resolved', 'N/A')}")
     if 'oldest' in stats and stats['oldest'] != 'N/A':
         lines.append(f"**Oldest unresolved:** {stats['oldest']}")
     if 'avg_unresolved_age' in stats and stats['avg_unresolved_age'] != 'N/A':

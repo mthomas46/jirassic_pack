@@ -8,7 +8,7 @@ import inspect
 from jirassicpack.cli_llm_server import update_llm_menu
 from jirassicpack.utils.logging import contextual_log, redact_sensitive
 from jirassicpack.utils.message_utils import error
-from jirassicpack.features import FEATURE_REGISTRY
+from jirassicpack.features import FEATURE_REGISTRY, FEATURE_MODULES
 from jirassicpack.utils.jira import select_account_id, select_property_key, search_issues
 from jirassicpack.cli_menu import prompt_text, prompt_select, prompt_checkbox
 
@@ -16,6 +16,7 @@ def run_feature(feature: str, jira, options: dict, user_email: str = None, batch
     """
     Dispatch and execute the selected feature, handling parameter gathering, logging, and error handling.
     """
+    print("[FATALDEBUG] run_feature called with feature:", feature)
     update_llm_menu()
     context = {"feature": feature, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
     contextual_log('debug', f"[DEBUG] run_feature called. feature={feature}, user_email={user_email}, batch_index={batch_index}, unique_suffix={unique_suffix}, options={options}", extra=context)
@@ -49,9 +50,31 @@ def run_feature(feature: str, jira, options: dict, user_email: str = None, batch
         "👀 Live Tail Local LLM Logs": "live_tail_local_llm_logs",
     }
     key = menu_to_key.get(feature, feature)
+    print("[FATALDEBUG] about to check for time_tracking_worklogs key:", key)
     context = {"feature": key, "user": user_email, "batch": batch_index, "suffix": unique_suffix}
     feature_tag = f"[{key}]"
-    contextual_log('info', f"🦖 [CLI] run_feature: key={repr(key)}", extra=context)
+    contextual_log('info', f"\U0001f996 [CLI] run_feature: key={repr(key)}", extra=context)
+    # PATCH: Always call prompt_worklog_options for time_tracking_worklogs
+    if key == "time_tracking_worklogs":
+        print("[FATALDEBUG] inside time_tracking_worklogs prompt logic")
+        feature_module = FEATURE_MODULES[key]
+        prompt_func = getattr(feature_module, "prompt_worklog_options", None)
+        print("[FATALDEBUG] prompt_func from module:", prompt_func)
+        if prompt_func is None:
+            print("[FATALDEBUG] FATAL: prompt_worklog_options not found on module! Aborting.")
+            contextual_log('fatal', f"FATAL: prompt_worklog_options not found on module {feature_module}", extra=context)
+            return
+        if 'jira' in prompt_func.__code__.co_varnames:
+            params = prompt_func(options, jira=jira)
+        else:
+            params = prompt_func(options)
+        print("[FATALDEBUG] params after prompt_func:", params)
+        if not params or not params.get('users'):
+            contextual_log('error', f"[ERROR] Prompt did not return users. Params: {params}", extra=context)
+            print("[FATALDEBUG] Prompt did not return users. Params:", params)
+            return
+        FEATURE_REGISTRY[key](jira, params, user_email=user_email, batch_index=batch_index, unique_suffix=unique_suffix)
+        return
     # Inline handlers for user features (examples, add more as needed)
     if key == "get_user":
         try:
@@ -91,18 +114,19 @@ def run_feature(feature: str, jira, options: dict, user_email: str = None, batch
     contextual_log('info', f"🦖 [CLI] Dispatching feature: {key} | Options: {redact_sensitive(options)} {context}", extra=context)
     prompt_func_name = f"prompt_{key}_options"
     prompt_func = None
-    feature_module = FEATURE_REGISTRY[key]
+    feature_module = FEATURE_MODULES[key]
     contextual_log('debug', f"[DEBUG] Looking for prompt function: {prompt_func_name} in {feature_module}", extra=context)
     if hasattr(feature_module, prompt_func_name):
         prompt_func = getattr(feature_module, prompt_func_name)
         contextual_log('debug', f"[DEBUG] Found prompt function: {prompt_func_name} in module {feature_module}", extra=context)
     else:
+        print("[FATALDEBUG] prompt_func not found in feature_module, trying import")
         try:
             mod = importlib.import_module(f"jirassicpack.features.{key}")
             prompt_func = getattr(mod, prompt_func_name, None)
-            contextual_log('debug', f"[DEBUG] Imported module jirassicpack.features.{key}, found prompt_func: {bool(prompt_func)}", extra=context)
+            print("[FATALDEBUG] prompt_func after import:", prompt_func)
         except Exception as e:
-            contextual_log('debug', f"[DEBUG] Could not import prompt function for {key}: {e}", extra=context)
+            print("[FATALDEBUG] Exception during import for prompt_func:", e)
             prompt_func = None
     if prompt_func:
         sig = inspect.signature(prompt_func)

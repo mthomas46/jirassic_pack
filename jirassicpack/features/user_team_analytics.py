@@ -44,8 +44,9 @@ def prompt_user_team_analytics_options(opts: Dict[str, Any], jira: Any = None) -
         info("Please select Jira team members for analytics.")
         label_user_tuples = select_jira_user(jira, allow_multiple=True)
         if not label_user_tuples:
-            info("Aborted team member selection.")
+            info("Aborted or cleared team member selection.")
             return None
+        info(f"[user_team_analytics] Used fuzzy multi-select for team selection. Selected: {[label for label, _ in label_user_tuples]}")
         # Use accountId for each user
         users = [user_obj.get('accountId') for label, user_obj in label_user_tuples if user_obj and user_obj.get('accountId')]
         if not users:
@@ -55,7 +56,7 @@ def prompt_user_team_analytics_options(opts: Dict[str, Any], jira: Any = None) -
     elif not team:
         team = get_option(opts, 'team', prompt="Team members (comma-separated usernames):", required=True)
     start = get_option(opts, 'start_date', prompt="Start date (YYYY-MM-DD):", default='2024-01-01', required=True, validate=validate_date)
-    end = get_option(opts, 'end_date', prompt="End date (YYYY-MM-DD):", default='2024-01-31', required=True, validate=validate_date)
+    end = get_option(opts, 'end_date', prompt="End date (YYYY-MM-DD):", default='2026-01-31', required=True, validate=validate_date)
     out_dir = get_option(opts, 'output_dir', default='output')
     suffix = opts.get('unique_suffix', '')
     return {
@@ -132,45 +133,97 @@ def user_team_analytics(
         "blocked_by": [],
         "reporters": {},
     }
+    user_display_map = {}
     for user in users:
+        # Try to get display name for the user
+        display_name = user
+        try:
+            user_obj = jira.get_user(account_id=user)
+            display_name = user_obj.get('displayName', user)
+        except Exception:
+            pass
+        user_display_map[user] = display_name
+        # Fetch issues where the user is the worklog author in the date range
         user_jql = (
-            f"assignee = '{user}' "
-            f"AND updated >= '{start_date}' "
-            f"AND updated <= '{end_date}'"
+            f"worklogAuthor = '{user}' "
+            f"AND worklogDate >= '{start_date}' "
+            f"AND worklogDate <= '{end_date}'"
         )
         def do_user_analytics():
-            # Spinner and retry logic for robust user analytics
-            with spinner(f"🧬 Fetching issues for {user}..."):
+            with spinner(f"🧬 Fetching issues and worklogs for {display_name}..."):
                 return jira.search_issues(
                     user_jql,
                     fields=[
                         "key", "summary", "status", "issuetype", "priority", "created", "updated", "resolutiondate",
-                        "reporter", "labels", "issuelinks"
+                        "reporter", "labels", "issuelinks", "worklog"
                     ],
                     max_results=100
                 )
-        issues = retry_or_skip(f"Fetching issues for {user}", do_user_analytics)
+        issues = retry_or_skip(f"Fetching issues and worklogs for {display_name}", do_user_analytics)
+        # Aggregate worklog analytics
+        total_worklog_seconds = 0
+        worklog_issue_count = 0
+        for issue in issues or []:
+            worklogs = safe_get(issue, ['fields', 'worklog', 'worklogs'], [])
+            for wl in worklogs:
+                if wl.get('author', {}).get('accountId') == user:
+                    total_worklog_seconds += wl.get('timeSpentSeconds', 0)
+                    worklog_issue_count += 1
+        # If no issues, set default summary
         if not issues:
-            all_user_data[user] = {"issues": [], "summary": {}}
+            all_user_data[user] = {"issues": [], "summary": {
+                "status_counts": {},
+                "type_counts": {},
+                "priority_counts": {},
+                "avg_cycle": 'N/A',
+                "med_cycle": 'N/A',
+                "oldest": 'N/A',
+                "newest": 'N/A',
+                "total": 0,
+                "created": 0,
+                "resolved": 0,
+                "created_vs_resolved": 'N/A',
+                "blockers": [],
+                "critical": [],
+                "blocked": [],
+                "age_buckets": {"30d": 0, "60d": 0, "90d": 0},
+                "avg_unresolved_age": 'N/A',
+                "med_unresolved_age": 'N/A',
+                "linked": 0,
+                "blocking": [],
+                "blocked_by": [],
+                "reporters": {},
+                "unresolved_ages": [],
+                "worklog_hours": 0,
+                "worklog_issue_count": 0,
+            }}
             continue
         # Aggregate analytics
         summary = aggregate_issue_stats(issues)
+        summary["worklog_hours"] = round(total_worklog_seconds / 3600, 2)
+        summary["worklog_issue_count"] = worklog_issue_count
         all_user_data[user] = {
             "issues": issues,
             "summary": summary
         }
-        # Team summary aggregation
-        team_stats["total_issues"] += len(issues)
-        team_stats["created"] += summary['created']
-        team_stats["resolved"] += summary['resolved']
-        team_stats["age_buckets"]["30d"] += summary['age_buckets']['30d']
-        team_stats["age_buckets"]["60d"] += summary['age_buckets']['60d']
-        team_stats["age_buckets"]["90d"] += summary['age_buckets']['90d']
-        team_stats["unresolved_ages"].extend(summary['unresolved_ages'])
-        team_stats["self_assigned"] += summary['self_assigned']
-        team_stats["assigned_by_others"] += summary['assigned_by_others']
-        for reporter, count in summary['reporters'].items():
-            team_stats["reporters"][reporter] = team_stats["reporters"].get(reporter, 0) + count
+        # Debug log for summary dict
+        info(f"[user_team_analytics][DEBUG] Summary for user {user}: {summary}")
+        try:
+            # Team summary aggregation
+            team_stats["total_issues"] += len(issues)
+            team_stats["created"] += summary.get('created', 0)
+            team_stats["resolved"] += summary.get('resolved', 0)
+            team_stats["age_buckets"]["30d"] += summary.get('age_buckets', {}).get('30d', 0)
+            team_stats["age_buckets"]["60d"] += summary.get('age_buckets', {}).get('60d', 0)
+            team_stats["age_buckets"]["90d"] += summary.get('age_buckets', {}).get('90d', 0)
+            team_stats["unresolved_ages"].extend(summary.get('unresolved_ages', []))
+            team_stats["self_assigned"] += summary.get('self_assigned', 0)
+            team_stats["assigned_by_others"] += summary.get('assigned_by_others', 0)
+            for reporter, count in summary.get('reporters', {}).items():
+                team_stats["reporters"][reporter] = team_stats["reporters"].get(reporter, 0) + count
+        except Exception as e:
+            contextual_log('error', f"[user_team_analytics] Error during summary aggregation for user {user}: {e}", exc_info=True, extra=context, feature='user_team_analytics')
+            raise
     if not any(len(data["issues"]) for data in all_user_data.values()):
         info("🦖 See, Nobody Cares. No analytics data found.", extra=context, feature='user_team_analytics')
         contextual_log('info', "🦖 See, Nobody Cares. No analytics data found.", extra=context, feature='user_team_analytics')
@@ -191,12 +244,13 @@ def user_team_analytics(
         for user, data in all_user_data.items():
             summary = data["summary"]
             issues = data["issues"]
-            grouped_sections += f"\n## {user}\n"
+            display_name = user_display_map.get(user, user)
+            grouped_sections += f"\n## {display_name} ({user})\n"
             grouped_sections += make_summary_section(summary) + "\n"
-            grouped_sections += make_breakdown_section(summary["status_counts"], "Status Breakdown")
-            grouped_sections += make_breakdown_section(summary["type_counts"], "Type Breakdown")
-            grouped_sections += make_breakdown_section(summary["priority_counts"], "Priority Breakdown")
-            grouped_sections += make_reporter_section(summary["reporters"], "Reporters")
+            grouped_sections += make_breakdown_section(summary.get("status_counts", {}), "Status Breakdown")
+            grouped_sections += make_breakdown_section(summary.get("type_counts", {}), "Type Breakdown")
+            grouped_sections += make_breakdown_section(summary.get("priority_counts", {}), "Priority Breakdown")
+            grouped_sections += make_reporter_section(summary.get("reporters", {}), "Reporters")
             grouped_sections += "\n### Issue List\n"
             grouped_sections += make_markdown_table(["Key", "Summary", "Status", "Resolved"], [[i.get('key', ''), safe_get(i, ['fields', 'summary'], ''), safe_get(i, ['fields', 'status', 'name'], ''), safe_get(i, ['fields', 'resolutiondate'], '')] for i in issues])
             grouped_sections += "\n---\n"
@@ -217,6 +271,6 @@ def user_team_analytics(
         contextual_log('error', f"Failed to write analytics file: {e}", exc_info=True, operation="output_write", error_type=type(e).__name__, status="error", extra=context, feature='user_team_analytics')
         error(f"Failed to write analytics file: {e}", extra=context, feature='user_team_analytics')
         contextual_log('error', f"[User/Team Analytics] Exception: {e}", exc_info=True, operation="feature_end", error_type=type(e).__name__, status="error", extra=context, feature='user_team_analytics')
-    celebrate_success()
-    info_spared_no_expense()
+    # celebrate_success()
+    # info_spared_no_expense()
     info(f"🧬 User/team analytics written to {filename}", extra=context, feature='user_team_analytics') 

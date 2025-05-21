@@ -5,7 +5,7 @@ All Jira API helpers, user/field/transition selectors, and interactive search ut
 """
 import questionary
 from jirassicpack.utils.message_utils import info
-from jirassicpack.utils.prompt_utils import prompt_text, prompt_select, select_with_pagination_and_fuzzy, select_from_list
+from jirassicpack.utils.prompt_utils import prompt_text, prompt_select, select_with_pagination_and_fuzzy, select_from_list, select_with_fuzzy_multiselect
 from jirassicpack.utils.output_utils import pretty_print_result
 from rich.table import Table
 from rich.console import Console
@@ -88,11 +88,12 @@ def select_jira_user(jira, allow_multiple=False, default_user=None, force_refres
         info("No users found.")
         return None if not allow_multiple else []
     if allow_multiple:
-        picked = select_from_list(
+        picked = select_with_fuzzy_multiselect(
             user_choices,
-            message="Select Jira users (multi-select mode):",
-            multi=True
+            message="Select Jira users (multi-select mode):"
         )
+        if not picked:
+            return []  # User aborted or cleared
         # Extract .value if Choice objects are returned
         if picked and isinstance(picked[0], Choice):
             picked = [p.value for p in picked]

@@ -5,6 +5,7 @@ Handles input validation, required checks, and option retrieval.
 from jirassicpack.utils.prompt_utils import prompt_select, prompt_text, prompt_password
 from jirassicpack.utils.rich_prompt import rich_error
 from marshmallow import ValidationError
+from jirassicpack.utils.jira import select_jira_user
 
 def get_option(options, key, prompt=None, default=None, choices=None, required=False, validate=None, password=False, marshmallow_field=None, marshmallow_schema=None):
     value = options.get(key, default)
@@ -89,17 +90,36 @@ def prompt_with_schema(schema, options, jira=None, abort_option=True):
     """
     from jirassicpack.utils.prompt_utils import prompt_text, prompt_select, prompt_password
     from jirassicpack.utils.rich_prompt import rich_error
+    from jirassicpack.utils.jira import select_jira_user
     from marshmallow import ValidationError
+    from jirassicpack.utils.message_utils import info
     data = dict(options)
     fields = schema.fields
+    print(f"[DEEPDEBUG] prompt_with_schema called. Initial data: {data}")
+    info(f"[DEEPDEBUG] prompt_with_schema called. Initial data: {data}")
     while True:
         for name, field in fields.items():
-            if name in data and data[name] not in (None, ''):
+            # Always prompt for 'user', even if a value is present
+            if name == 'user':
+                print(f"[DEEPDEBUG] Forcing prompt for 'user'. Current data: {data}")
+                info(f"[DEEPDEBUG] Forcing prompt for 'user'. Current data: {data}")
+            elif name in data and data[name] not in (None, ''):
                 continue
             prompt = field.metadata.get('prompt') or f"Enter {name.replace('_', ' ').title()}:"
             default = field.default if hasattr(field, 'default') else None
             if hasattr(field, 'load_default'):
                 default = field.load_default
+            if name == 'user' and jira:
+                print(f"[DEEPDEBUG] Invoking select_jira_user for 'user' field.")
+                info("[DEEPDEBUG] Invoking select_jira_user for 'user' field.")
+                label_user_tuple = select_jira_user(jira, allow_multiple=False)
+                if not label_user_tuple or not label_user_tuple[1]:
+                    if abort_option:
+                        return '__ABORT__'
+                    else:
+                        continue
+                data[name] = label_user_tuple[1].get('accountId')
+                continue
             if hasattr(field, 'choices') and field.choices:
                 value = prompt_select(prompt, choices=field.choices, default=default)
             elif getattr(field, 'password', False):
@@ -111,6 +131,8 @@ def prompt_with_schema(schema, options, jira=None, abort_option=True):
             data[name] = value
         try:
             validated = schema.load(data)
+            print(f"[DEEPDEBUG] prompt_with_schema validated: {validated}")
+            info(f"[DEEPDEBUG] prompt_with_schema validated: {validated}")
             return validated
         except ValidationError as err:
             for field_name, msgs in err.messages.items():

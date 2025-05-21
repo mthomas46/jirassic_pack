@@ -222,11 +222,68 @@ def _select_from_list(
 # Public alias for select_from_list
 select_from_list = _select_from_list
 
+def select_with_fuzzy_multiselect(choices, message="Select items:", min_selection=1, max_selection=None):
+    """
+    Hybrid fuzzy multi-select: repeatedly show a fuzzy single-select to add users, with 'Done' and 'Abort' options, then confirm with a checkbox. True fuzzy search and reliable multi-select.
+    Returns None if aborted, or a list of selected values.
+    """
+    abort_label = "❌ Abort"
+    done_label = "✅ Done selecting"
+    clear_label = "🔄 Clear Selections"
+    base_choices = choices.copy()
+    selected = []
+    while True:
+        # Build list of choices not yet selected
+        remaining = [c for c in base_choices if (c['value'] if isinstance(c, dict) else c) not in selected]
+        fuzzy_choices = remaining + [{"name": done_label, "value": done_label}, {"name": abort_label, "value": abort_label}]
+        prompt_message = message + "\n(Use spacebar or Enter to select, type to fuzzy search, select 'Done' when finished.)\nSelected: " + ", ".join(str(s) for s in selected)
+        picked = inquirer.fuzzy(
+            message=prompt_message,
+            choices=fuzzy_choices,
+            multiselect=False,
+            validate=None,
+            max_height="70%"
+        ).execute()
+        if picked == abort_label or picked is None:
+            return None
+        if picked == done_label:
+            break
+        # Extract value if dict
+        val = picked['value'] if isinstance(picked, dict) else picked
+        if val not in selected:
+            selected.append(val)
+    # Final confirmation with checkbox
+    if not selected:
+        return None
+    confirm_choices = [{"name": str(c), "value": c, "enabled": True} for c in selected] + [{"name": clear_label, "value": clear_label}, {"name": abort_label, "value": abort_label}]
+    while True:
+        confirm_message = "Review your selections (spacebar to select/deselect, Enter to confirm):"
+        confirmed = inquirer.checkbox(
+            message=confirm_message,
+            choices=confirm_choices,
+            instruction="Type to filter",
+            transformer=lambda result: result,
+            filter=lambda result: result,
+            cycle=True,
+            validate=None,
+            max_height="70%"
+        ).execute()
+        if not confirmed or abort_label in confirmed:
+            return None
+        if clear_label in confirmed:
+            selected = []
+            break  # Go back to fuzzy selection
+        if min_selection and len(confirmed) < min_selection:
+            print(f"Please select at least {min_selection} item(s), or Abort.")
+            continue
+        return confirmed
+
 __all__ = [
     "prompt_text",
     "prompt_select",
     "prompt_password",
     "prompt_checkbox",
     "select_with_pagination_and_fuzzy",
-    "select_from_list"
+    "select_from_list",
+    "select_with_fuzzy_multiselect"
 ] 
