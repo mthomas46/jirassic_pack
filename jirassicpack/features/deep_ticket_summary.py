@@ -26,6 +26,7 @@ import re
 from jirassicpack.jira_client import JiraClient
 from dotenv import load_dotenv
 from github import GithubException
+from jirassicpack.features.ticket_discussion_summary import call_local_llm_github_pr, call_local_llm_text
 
 
 def safe_string(val):
@@ -448,8 +449,10 @@ def deep_ticket_summary(
                 test_file_path = 'jirassicpack/features/code_analysis_test_file.py'
                 github_api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{test_file_path}"
                 headers = {"Authorization": f"token {github_token}"} if github_token else {}
+                contextual_log('info', '[deep_ticket_summary] Attempting to fetch code_analysis_test_file.py from GitHub (GithubException fallback)', context, github_api_url=github_api_url)
                 try:
                     resp = requests.get(github_api_url, headers=headers)
+                    contextual_log('info', '[deep_ticket_summary] GitHub API response for code_analysis_test_file.py', context, status_code=resp.status_code)
                     if resp.status_code == 200:
                         file_json = resp.json()
                         encoded_content = file_json.get('content', '')
@@ -457,8 +460,10 @@ def deep_ticket_summary(
                             test_code = base64.b64decode(encoded_content).decode('utf-8')
                         else:
                             test_code = encoded_content
-                        contextual_log('info', '[deep_ticket_summary] Successfully fetched code_analysis_test_file.py from GitHub.', context)
+                        contextual_log('info', '[deep_ticket_summary] Successfully fetched code_analysis_test_file.py from GitHub.', context, content_length=len(test_code))
+                        contextual_log('info', '[deep_ticket_summary] Sending code to LLM for analysis', context)
                         llm_result = run_llm_code_analysis(test_code)
+                        contextual_log('info', '[deep_ticket_summary] LLM code analysis complete', context, llm_result_preview=llm_result[:200])
                         report_sections.append({'title': 'Fallback Code Analysis (Test File from GitHub)', 'content': llm_result})
                         return
                     else:
@@ -471,92 +476,46 @@ def deep_ticket_summary(
                     return
             else:
                 pass  # Other GithubException errors can be handled here
-    # 4. Fallback: GitHub API search for branch/PR if not found via Jira or local git
-    if not pr_found:
-        github_conf = config.get_github_config() if hasattr(config, 'get_github_config') else config.get('github', {})
-        github_token = github_conf.get('token')
-        github_org_url = github_conf.get('url', '')
-        github_org = github_org_url.split('/')[-1] if github_org_url else ''
-        github_headers = None
-        github_config_incomplete = False
-        if not (github_token and github_org):
-            github_config_incomplete = True
-            missing_params = []
-            if not github_token:
-                missing_params.append('github_token')
-            if not github_org:
-                missing_params.append('github_org')
-            error_msg = f"> ⚠️ **Warning:** GitHub token or org missing from config ({', '.join(missing_params)}). Cannot perform GitHub API lookup. Please check your configuration.\n\n"
-            github_analysis_section += error_msg
-            safe_contextual_log('error', '[deep_ticket_summary] GitHub API config incomplete', context, github_token_present=bool(github_token), github_org=github_org, missing_params=missing_params)
-        else:
-            github_headers = {"Authorization": f"token {github_token}"}
-            try:
-                safe_contextual_log('info', '[deep_ticket_summary] Listing repos in org (GitHub API call)', context, github_org=github_org, url=f"https://api.github.com/orgs/{github_org}/repos")
-                repos_resp = requests.get(f"https://api.github.com/orgs/{github_org}/repos", headers=github_headers)
-                safe_contextual_log('info', '[deep_ticket_summary] GitHub API response for repo list', context, status_code=repos_resp.status_code)
-                repos_resp.raise_for_status()
-                repos = repos_resp.json()
-                found_branches = []
-                found_prs = []
-                for repo in repos:
-                    repo_name = repo['name']
-                    # List branches in the repo
-                    try:
-                        branch_url = f"https://api.github.com/repos/{github_org}/{repo_name}/branches"
-                        safe_contextual_log('info', '[deep_ticket_summary] Listing branches in repo (GitHub API call)', context, repo=repo_name, url=branch_url)
-                        branches_resp = requests.get(branch_url, headers=github_headers)
-                        safe_contextual_log('info', '[deep_ticket_summary] GitHub API response for branch list', context, repo=repo_name, status_code=branches_resp.status_code)
-                        branches_resp.raise_for_status()
-                        branches = branches_resp.json()
-                        for branch in branches:
-                            branch_name = branch.get('name', '')
-                            if issue_key in branch_name:
-                                found_branches.append({'repo': repo_name, 'branch': branch_name})
-                                # Search for PRs with this branch as head
-                                pr_url = f"https://api.github.com/repos/{github_org}/{repo_name}/pulls?head={github_org}:{branch_name}&state=all"
-                                safe_contextual_log('info', '[deep_ticket_summary] Listing PRs for branch (GitHub API call)', context, repo=repo_name, branch=branch_name, url=pr_url)
-                                prs_resp = requests.get(pr_url, headers=github_headers)
-                                safe_contextual_log('info', '[deep_ticket_summary] GitHub API response for PR list', context, repo=repo_name, branch=branch_name, status_code=prs_resp.status_code)
-                                prs_resp.raise_for_status()
-                                prs = prs_resp.json()
-                                for pr in prs:
-                                    found_prs.append({'repo': repo_name, 'branch': branch_name, 'pr': pr})
-                    except Exception as e:
-                        safe_contextual_log('error', '[deep_ticket_summary] Error listing branches or PRs in repo', context, repo=repo_name, exception=str(e))
-                if found_prs:
-                    github_analysis_section += f"### GitHub PRs matching `{issue_key}`\n\n"
-                    for item in found_prs:
-                        pr = item['pr']
-                        pr_title = pr.get('title', '')
-                        pr_url = pr.get('html_url', '')
-                        pr_state = pr.get('state', '')
-                        pr_user = pr.get('user', {}).get('login', '')
-                        pr_merged = pr.get('merged_at') is not None
-                        pr_draft = pr.get('draft', False)
-                        pr_status_emoji = '✔️' if pr_merged else ('🟢' if pr_state == 'open' else '🔴')
-                        if pr_draft:
-                            pr_status_emoji = '📝'
-                        pr_status_str = f"{pr_status_emoji} "
-                        if pr_merged:
-                            pr_status_str += f"Merged at {pr.get('merged_at', '')}"
-                        elif pr_draft:
-                            pr_status_str += "Draft"
+        except requests.exceptions.HTTPError as http_err:
+            if hasattr(http_err.response, 'status_code') and http_err.response.status_code == 403:
+                contextual_log('warning', '[deep_ticket_summary] 403 Forbidden (HTTPError) on GitHub repo access. Fetching code_analysis_test_file.py from GitHub.', context)
+                github_conf = config.get_github_config() if hasattr(config, 'get_github_config') else config.get('github', {})
+                github_token = github_conf.get('token')
+                repo_owner = github_conf.get('owner', 'jirassicpack')
+                repo_name = github_conf.get('repo', 'jirassicpack')
+                test_file_path = 'jirassicpack/features/code_analysis_test_file.py'
+                github_api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{test_file_path}"
+                headers = {"Authorization": f"token {github_token}"} if github_token else {}
+                contextual_log('info', '[deep_ticket_summary] Attempting to fetch code_analysis_test_file.py from GitHub (HTTPError fallback)', context, github_api_url=github_api_url)
+                try:
+                    resp = requests.get(github_api_url, headers=headers)
+                    contextual_log('info', '[deep_ticket_summary] GitHub API response for code_analysis_test_file.py', context, status_code=resp.status_code)
+                    if resp.status_code == 200:
+                        file_json = resp.json()
+                        encoded_content = file_json.get('content', '')
+                        if file_json.get('encoding') == 'base64':
+                            test_code = base64.b64decode(encoded_content).decode('utf-8')
                         else:
-                            pr_status_str += pr_state.capitalize()
-                        github_analysis_section += f"- **Repo:** `{item['repo']}` | **Branch:** `{item['branch']}` | **PR:** [{pr_title}]({pr_url}) | **Status:** {pr_status_str} | **Author:** {pr_user}\n"
-                    github_analysis_section += "\n"
-                elif found_branches:
-                    github_analysis_section += f"### GitHub branches matching `{issue_key}` (no PRs found)\n\n"
-                    for item in found_branches:
-                        github_analysis_section += f"- **Repo:** `{item['repo']}` | **Branch:** `{item['branch']}`\n"
-                    github_analysis_section += "\n"
-                else:
-                    github_analysis_section += f"> 📢 **Info:** No branches or PRs found in GitHub repos matching `{issue_key}`.\n\n"
-                safe_contextual_log('info', '[deep_ticket_summary] GitHub branch/PR lookup complete', context, found_prs=len(found_prs), found_branches=len(found_branches))
-            except Exception as e:
-                safe_contextual_log('error', '[deep_ticket_summary] Error during GitHub API repo/branch/PR lookup', context, exception=str(e))
-                github_analysis_section += f"> ⚠️ **Warning:** Could not analyze GitHub for this ticket using GitHub API: {e}\n\n"
+                            test_code = encoded_content
+                        contextual_log('info', '[deep_ticket_summary] Successfully fetched code_analysis_test_file.py from GitHub.', context, content_length=len(test_code))
+                        contextual_log('info', '[deep_ticket_summary] Sending code to LLM for analysis', context)
+                        llm_result = run_llm_code_analysis(test_code)
+                        contextual_log('info', '[deep_ticket_summary] LLM code analysis complete', context, llm_result_preview=llm_result[:200])
+                        report_sections.append({'title': 'Fallback Code Analysis (Test File from GitHub)', 'content': llm_result})
+                        return
+                    else:
+                        contextual_log('error', f'[deep_ticket_summary] Failed to fetch code_analysis_test_file.py from GitHub. Status: {resp.status_code}', context)
+                        report_sections.append({'title': 'Fallback Code Analysis (Test File from GitHub)', 'content': f'> ⚠️ Could not fetch code_analysis_test_file.py from GitHub. Status: {resp.status_code}'})
+                        return
+                except Exception as ex:
+                    contextual_log('error', f'[deep_ticket_summary] Exception fetching code_analysis_test_file.py from GitHub: {ex}', context)
+                    report_sections.append({'title': 'Fallback Code Analysis (Test File from GitHub)', 'content': f'> ⚠️ Exception fetching code_analysis_test_file.py from GitHub: {ex}'})
+                    return
+            else:
+                pass  # Other HTTPError exceptions can be handled here
+        except Exception as e:
+            safe_contextual_log('error', '[deep_ticket_summary] Error during Jira dev-status API lookup', context, exception=str(e))
+            github_analysis_section += f"> ⚠️ **Warning:** Could not analyze GitHub via Jira dev-status: {e}\n\n"
 
     # --- After scraping PR URLs, fetch PR details and analyze with LLM ---
     github_conf = config.get_github_config() if hasattr(config, 'get_github_config') else config.get('github', {})
@@ -575,40 +534,36 @@ def deep_ticket_summary(
         if match:
             owner, repo, pr_number = match.groups()
             api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
-            try:
-                resp = requests.get(api_url, headers=github_headers)
-                pr_data = resp.json()
-                safe_contextual_log('info', '[deep_ticket_summary] GitHub PR API response from scraped URL', context, pr_url=pr_url, status_code=resp.status_code, pr_data=str(pr_data)[:1000])
-                if resp.status_code == 200 and isinstance(pr_data, dict):
-                    pr_title = pr_data.get('title', '')
-                    pr_body = pr_data.get('body', '')
-                    pr_state = pr_data.get('state', '')
-                    pr_user = pr_data.get('user', {}).get('login', '')
-                    pr_branch = pr_data.get('head', {}).get('ref', '')
-                    pr_diff_url = pr_data.get('diff_url', '')
-                    # Optionally fetch the diff (if you want to include it in LLM analysis)
-                    diff_text = ''
-                    if pr_diff_url:
-                        try:
-                            diff_resp = requests.get(pr_diff_url, headers=github_headers)
-                            if diff_resp.status_code == 200:
-                                diff_text = diff_resp.text[:2000]  # Truncate for LLM
-                        except Exception as e:
-                            safe_contextual_log('error', '[deep_ticket_summary] Error fetching PR diff from GitHub', context, pr_url=pr_url, exception=str(e))
-                    # Call local LLM for code analysis
-                    try:
-                        llm_prompt = f"Analyze the following GitHub pull request.\n\nTitle: {pr_title}\nDescription: {pr_body}\nBranch: {pr_branch}\nState: {pr_state}\nAuthor: {pr_user}\nDiff (truncated):\n{diff_text}\n\nSummarize what this PR does, its risks, and whether it meets its likely acceptance criteria."
-                        pr_llm_analysis = call_openai_llm(llm_prompt, "gpt-3.5-turbo", 512, 0.2)
-                        pr_analysis_blocks.append(f"### Analysis of [PR #{pr_number}]({pr_url}) in `{owner}/{repo}`\n\n{pr_llm_analysis}\n")
-                        safe_contextual_log('info', '[deep_ticket_summary] LLM analysis of PR from scraped URL', context, pr_url=pr_url, analysis=pr_llm_analysis[:500])
-                    except Exception as e:
-                        pr_analysis_blocks.append(f"### Analysis of [PR #{pr_number}]({pr_url}) in `{owner}/{repo}`\n\n> ⚠️ LLM analysis failed: {e}\n")
-                        safe_contextual_log('error', '[deep_ticket_summary] LLM analysis of PR from scraped URL failed', context, pr_url=pr_url, exception=str(e))
-            except Exception as e:
-                safe_contextual_log('error', '[deep_ticket_summary] Error fetching GitHub PR from scraped URL', context, pr_url=pr_url, exception=str(e))
+            resp = github_api_get_with_fallback(api_url, github_headers, context, config, pr_analysis_blocks, f'fetch PR #{pr_number} metadata')
+            if resp is None:
+                continue  # Fallback handled, skip further analysis for this PR
+            pr_data = resp.json()
+            safe_contextual_log('info', '[deep_ticket_summary] GitHub PR API response from scraped URL', context, pr_url=pr_url, status_code=resp.status_code, pr_data=str(pr_data)[:1000])
+            if resp.status_code == 200 and isinstance(pr_data, dict):
+                pr_title = pr_data.get('title', '')
+                pr_body = pr_data.get('body', '')
+                pr_state = pr_data.get('state', '')
+                pr_user = pr_data.get('user', {}).get('login', '')
+                pr_branch = pr_data.get('head', {}).get('ref', '')
+                pr_diff_url = pr_data.get('diff_url', '')
+                # Optionally fetch the diff (if you want to include it in LLM analysis)
+                diff_text = ''
+                if pr_diff_url:
+                    diff_resp = github_api_get_with_fallback(pr_diff_url, github_headers, context, config, pr_analysis_blocks, f'fetch PR #{pr_number} diff')
+                    if diff_resp is not None and diff_resp.status_code == 200:
+                        diff_text = diff_resp.text[:2000]  # Truncate for LLM
+                # Call local LLM for code analysis
+                try:
+                    llm_prompt = f"Analyze the following GitHub pull request.\n\nTitle: {pr_title}\nDescription: {pr_body}\nBranch: {pr_branch}\nState: {pr_state}\nAuthor: {pr_user}\nDiff (truncated):\n{diff_text}\n\nSummarize what this PR does, its risks, and whether it meets its likely acceptance criteria."
+                    pr_llm_analysis = call_openai_llm(llm_prompt, "gpt-3.5-turbo", 512, 0.2)
+                    pr_analysis_blocks.append(f"### Analysis of [PR #{pr_number}]({pr_url}) in `{owner}/{repo}`\n\n{pr_llm_analysis}\n")
+                    safe_contextual_log('info', '[deep_ticket_summary] LLM analysis of PR from scraped URL', context, pr_url=pr_url, analysis=pr_llm_analysis[:500])
+                except Exception as e:
+                    pr_analysis_blocks.append(f"### Analysis of [PR #{pr_number}]({pr_url}) in `{owner}/{repo}`\n\n> ⚠️ LLM analysis failed: {e}\n")
+                    safe_contextual_log('error', '[deep_ticket_summary] LLM analysis of PR from scraped URL failed', context, pr_url=pr_url, exception=str(e))
     # Add PR analysis blocks to the GitHub Analysis section of the report
     if pr_analysis_blocks:
-        github_analysis_section += '\n'.join(pr_analysis_blocks)
+        github_analysis_section += '\n'.join(format_report_section_item(item, context) for item in pr_analysis_blocks)
 
     # --- Compose enhanced report sections (move this after LLM calls) ---
     # Visual summary block at the top
@@ -701,11 +656,19 @@ def deep_ticket_summary(
         ai_explicit_sections += f"<details><summary><b>{safe_string(section)}</b></summary>\n\n{content_str}\n\n</details>\n\n"
     ai_section_header = "## AI-Generated Business Value\n\n" + ai_warning + (ai_summary_collapsible if 'ai_summary_collapsible' in locals() else "") + ai_explicit_sections + "---\n\n"
     # Compose final report using build_report_sections
+    # If report_sections contains dicts, format them as Markdown
+    formatted_report_sections = []
+    for section in report_sections if 'report_sections' in locals() else []:
+        formatted_report_sections.append(format_report_section_item(section, context))
+    # Add formatted_report_sections to the grouped_sections
+    grouped_sections = ai_section_header + description_acceptance + comments_changelog + insights_block + github_analysis_section + (related_links if 'related_links' in locals() else '')
+    if formatted_report_sections:
+        grouped_sections += '\n'.join(format_report_section_item(s, context) for s in formatted_report_sections)
     sections = {
         'header': visual_summary + toc,
         'toc': '',
         'summary': quick_insights,
-        'grouped_sections': ai_section_header + description_acceptance + comments_changelog + insights_block + github_analysis_section + (related_links if 'related_links' in locals() else ''),
+        'grouped_sections': grouped_sections,
         'metadata': f"## Metadata\n---\n**Report generated by:** {user_email}  \n**Run at:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  \n",
         'glossary': glossary if 'glossary' in locals() else '',
         'next_steps': next_steps if 'next_steps' in locals() else '',
@@ -773,3 +736,114 @@ def test_github_connection_and_branches(github_token, owner, repo, context):
             safe_contextual_log('error', '[deep_ticket_summary] GitHub repo access failed', context, repo_url=repo_url, status_code=repo_resp.status_code)
     except Exception as e:
         safe_contextual_log('error', '[deep_ticket_summary] Exception during GitHub repo/branch test', context, repo_url=repo_url, exception=str(e)) 
+
+def handle_github_403_fallback(context, config, report_sections):
+    """Centralized fallback logic for 403/404 errors during GitHub API calls."""
+    contextual_log('warning', '[deep_ticket_summary] 403/404 detected. Entering fallback code analysis logic.', context)
+    # Always use the public test repo for fallback
+    github_token = None  # No token needed for public repo, but can use one if available
+    repo_owner = 'mthomas46'
+    repo_name = 'jirassic_pack'
+    branch = 'main'
+    test_file_path = 'jirassicpack/features/code_analysis_test_file.py'
+    github_api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{test_file_path}?ref={branch}"
+    # Use token if available for higher rate limits
+    github_conf = config.get_github_config() if hasattr(config, 'get_github_config') else config.get('github', {})
+    github_token = github_conf.get('token')
+    headers = {"Authorization": f"token {github_token}"} if github_token else {}
+    contextual_log('info', '[deep_ticket_summary] Attempting to fetch code_analysis_test_file.py from mthomas46/jirassic_pack (main branch, centralized fallback)', context, github_api_url=github_api_url)
+    try:
+        resp = requests.get(github_api_url, headers=headers)
+        contextual_log('info', '[deep_ticket_summary] GitHub API response for code_analysis_test_file.py', context, status_code=resp.status_code)
+        if resp.status_code == 200:
+            file_json = resp.json()
+            encoded_content = file_json.get('content', '')
+            if file_json.get('encoding') == 'base64':
+                test_code = base64.b64decode(encoded_content).decode('utf-8')
+            else:
+                test_code = encoded_content
+            contextual_log('info', '[deep_ticket_summary] Successfully fetched code_analysis_test_file.py from fallback repo.', context, content_length=len(test_code))
+            contextual_log('info', '[deep_ticket_summary] Attempting code analysis using local LLM GitHub PR endpoint', context)
+            # Try GitHub PR endpoint first
+            try:
+                pr_number = 1  # You may want to make this configurable or discoverable
+                repo_full_name = f"{repo_owner}/{repo_name}"
+                if github_token:
+                    llm_result = call_local_llm_github_pr(repo_full_name, pr_number, github_token, prompt="Analyze this PR for code quality and correctness. Also, suggest the most relevant code snippets from the PR that best illustrate the main logic or interesting parts, and present them in a Markdown code block with a short explanation for each.")
+                    contextual_log('info', '[deep_ticket_summary] LLM code analysis complete (GitHub PR endpoint)', context, llm_result_preview=llm_result[:200])
+                    # Try to split analysis and code snippets if possible
+                    analysis, snippets = None, None
+                    if '\n---\n' in llm_result:
+                        analysis, snippets = llm_result.split('\n---\n', 1)
+                    else:
+                        analysis = llm_result
+                        snippets = None
+                    content = analysis.strip() if analysis else llm_result.strip()
+                    if snippets:
+                        content += '\n\n### Suggested Code Snippets\n' + snippets.strip()
+                    report_sections.append({'title': 'Fallback Code Analysis (Local LLM GitHub PR endpoint)', 'content': content})
+                    contextual_log('info', '[deep_ticket_summary] Added code analysis and code snippets to report_sections (GitHub PR endpoint)', context)
+                    return True
+                else:
+                    raise Exception('No GitHub token available for PR endpoint.')
+            except Exception as pr_ex:
+                contextual_log('error', f'[deep_ticket_summary] GitHub PR endpoint failed: {pr_ex}. Falling back to text endpoint.', context)
+                try:
+                    llm_result = call_local_llm_text(
+                        "Analyze the following Python code for clarity, correctness, and potential improvements. Summarize what it does and call out any issues. Then, suggest the most relevant code snippets from the code that best illustrate the main logic or interesting parts, and present them in a Markdown code block with a short explanation for each.\n\nCode:\n\n" + test_code
+                    )
+                    contextual_log('info', '[deep_ticket_summary] LLM code analysis complete (text endpoint fallback)', context, llm_result_preview=llm_result[:200])
+                    # Try to split analysis and code snippets if possible
+                    analysis, snippets = None, None
+                    if '\n---\n' in llm_result:
+                        analysis, snippets = llm_result.split('\n---\n', 1)
+                    else:
+                        analysis = llm_result
+                        snippets = None
+                    content = analysis.strip() if analysis else llm_result.strip()
+                    if snippets:
+                        content += '\n\n### Suggested Code Snippets\n' + snippets.strip()
+                    report_sections.append({'title': 'Fallback Code Analysis (Local LLM Text endpoint)', 'content': content})
+                    contextual_log('info', '[deep_ticket_summary] Added code analysis and code snippets to report_sections (text endpoint fallback)', context)
+                    return True
+                except Exception as text_ex:
+                    contextual_log('error', f'[deep_ticket_summary] Both GitHub PR and text endpoint failed: {text_ex}', context)
+                    report_sections.append({'title': 'Fallback Code Analysis (Local LLM endpoints failed)', 'content': f'> ⚠️ Exception during local LLM code analysis: {text_ex}'})
+                    return True
+        else:
+            contextual_log('error', f'[deep_ticket_summary] Failed to fetch code_analysis_test_file.py from fallback repo. Status: {resp.status_code}', context)
+            report_sections.append({'title': 'Fallback Code Analysis (Test File from mthomas46/jirassic_pack)', 'content': f'> ⚠️ Could not fetch code_analysis_test_file.py from fallback repo. Status: {resp.status_code}'})
+            return True
+    except Exception as ex:
+        contextual_log('error', f'[deep_ticket_summary] Exception fetching code_analysis_test_file.py from fallback repo: {ex}', context)
+        report_sections.append({'title': 'Fallback Code Analysis (Test File from mthomas46/jirassic_pack)', 'content': f'> ⚠️ Exception fetching code_analysis_test_file.py from fallback repo: {ex}'})
+        return True
+
+def github_api_get_with_fallback(url, headers, context, config, report_sections, log_label):
+    """Helper to wrap all GitHub API GET calls with 403/404 fallback and granular logging."""
+    contextual_log('info', f'[deep_ticket_summary] GitHub API GET: {log_label}', context, url=url)
+    try:
+        resp = requests.get(url, headers=headers)
+        contextual_log('info', f'[deep_ticket_summary] GitHub API response: {log_label}', context, url=url, status_code=resp.status_code)
+        if resp.status_code in (403, 404):
+            contextual_log('warning', f'[deep_ticket_summary] GitHub API returned {resp.status_code} for {log_label}. Triggering fallback.', context, url=url)
+            triggered = handle_github_403_fallback(context, config, report_sections)
+            if triggered:
+                return None  # Fallback handled, stop further processing
+        return resp
+    except Exception as ex:
+        contextual_log('error', f'[deep_ticket_summary] Exception during GitHub API GET: {log_label}', context, url=url, exception=str(ex))
+        return None 
+
+def format_report_section_item(item, context=None):
+    """Format a report section item as a string for joining/concatenation."""
+    if isinstance(item, dict):
+        title = item.get('title', 'Section')
+        content = item.get('content', '')
+        if context:
+            safe_contextual_log('debug', f"Formatting dict section: {title}", context)
+        return f"## {title}\n\n{content}\n"
+    else:
+        if not isinstance(item, str) and context:
+            safe_contextual_log('warning', f"Non-string, non-dict section encountered: {type(item)}", context)
+        return str(item) 
