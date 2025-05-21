@@ -52,6 +52,7 @@
 - [Community & Contact](#community--contact)
 - [License](#license)
 - [Local LLM Integration: Using Jirassic Pack with Ollama7BPoc](#local-llm-integration-using-jirassic-pack-with-ollama7bpoc)
+- [Reporting & Analysis Enhancements](#reporting--analysis-enhancements)
 
 ---
 
@@ -180,9 +181,33 @@ Log Monitoring & Search
 | **Automated Documentation** | Generate release notes, changelogs, or sprint reviews from Jira issues | `doc_type`, `project`, `version`, `sprint` |  | `.md` | `GET /rest/api/3/search` |
 | **Advanced Metrics**    | Generate advanced metrics, breakdowns, and top-N analytics for issues | `user`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/search` |
 | **Sprint Board Management** | Summarize the state of a Jira board, sprints, and issues in the active sprint | `board_name` |  | `.md` | `GET /rest/agile/1.0/board`, `GET /rest/agile/1.0/board/{boardId}/sprint`, `GET /rest/agile/1.0/sprint/{sprintId}/issue` |
-| **Deep Ticket Summary** | Generate a full summary of a ticket, including changelog, comments, and all fields | `issue_key` | `output_dir`, `acceptance_criteria_field` | `.md` | `GET /rest/api/3/issue`, `GET /rest/api/3/issue/{issueIdOrKey}/changelog`, `GET /rest/api/3/issue/{issueIdOrKey}/comment` |
+| **Deep Ticket Summary** | Generate a full summary of a ticket, including changelog, comments, all fields, and AI/LLM-powered analysis | `issue_key` | `output_dir`, `acceptance_criteria_field` | `.md` | `GET /rest/api/3/issue`, `GET /rest/api/3/issue/{issueIdOrKey}/changelog`, `GET /rest/api/3/issue/{issueIdOrKey}/comment` |
+| **Test GitHub Connection** | Test GitHub API connectivity and list all branches/PRs you can see for a repo |  |  | `.md`, CLI | GitHub API |
 | **Gather Metrics**      | Gather and report metrics for Jira issues, including grouping by type and summary statistics | `user`, `start_date`, `end_date` |  | `.md` | `GET /rest/api/3/search` |
 | **Summarize Tickets**   | Generate summary reports for Jira tickets, including grouping, top assignees, and action items | `jql` |  | `.md` | `GET /rest/api/3/search`, `GET /rest/api/3/issue/{issueIdOrKey}/comment` |
+
+---
+
+### Challenges with GitHub Metadata & Rationale for Scraping Comments
+
+**Why is GitHub PR/branch metadata sometimes missing or unreliable?**
+
+- The Jira dev-status API, which is supposed to provide GitHub PR and branch metadata, often returns incomplete or empty details—even when the Jira UI shows PRs/branches.
+- The dev-status summary endpoint may show counts but not the actual PR/branch details needed for analysis.
+- Direct GitHub API calls can fail with 403 errors due to:
+  - Insufficient token scopes (e.g., missing `repo` or `read:org` permissions)
+  - SSO/2FA requirements or organization membership restrictions
+  - Private repo visibility or enterprise security policies
+- Even with correct permissions, API rate limits or network issues can block access.
+
+**Why scrape PR links from comments?**
+
+- Jira users often paste GitHub PR URLs directly into ticket comments or descriptions.
+- Scraping these links is a reliable fallback that works regardless of API integration issues or permission problems.
+- Once a PR URL is found, the tool can attempt to fetch PR metadata and run code analysis, or gracefully degrade if access is still blocked.
+
+**Summary:**
+> Scraping PR links from comments ensures robust, user-visible integration with GitHub, even when official APIs are unreliable or inaccessible. This approach maximizes the chance of extracting actionable code review and analysis for your Jira tickets.
 
 ---
 
@@ -442,13 +467,15 @@ options:
 > **Board** – A visual display of issues, often used for Scrum or Kanban.
 > **Sprint** – A time-boxed period for completing work in Scrum.
 
-#### Deep Ticket Summary
-**Description:**  Generate a full summary of a ticket, including changelog, comments, and all fields.
-
-**Jira API:**
-- [`GET /rest/api/3/issue`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-get)
-- [`GET /rest/api/3/issue/{issueIdOrKey}/changelog`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-changelog/#api-rest-api-3-issue-issueidorkey-changelog-get)
-- [`GET /rest/api/3/issue/{issueIdOrKey}/comment`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/#api-rest-api-3-issue-issueidorkey-comment-get)
+#### Deep Ticket Summary (🦖)
+**Description:**  Generates a comprehensive, professional Markdown report for a single Jira ticket, including:
+- Description, comments, changelog, all fields, and acceptance criteria
+- AI/LLM-powered executive summary, risk flags, action items, business value, stakeholder mapping, process insights, and documentation value
+- AI-enhanced acceptance criteria (extrapolated or improved if missing/weak)
+- Insights & Analysis of linked tickets and their relationships
+- GitHub Analysis: Attempts to find and analyze associated PRs/branches using multiple strategies (Jira dev-status API, scraping comments, GitHub API)
+- Robust fallback logic: If GitHub API access fails (403/404), fetches a public test file from GitHub and runs local LLM code analysis, including suggested code snippets
+- Extensive contextual logging for all major steps and errors
 
 **Parameters:**
 | Name                | Type   | Required | Description                |
@@ -457,21 +484,20 @@ options:
 | output_dir          | str    | No       | Output directory           |
 | acceptance_criteria_field | str | No       | Acceptance criteria field |
 
-**Example Config:**
-```yaml
-feature: deep_ticket_summary
-options:
-  issue_key: DEMO-123
-  output_dir: summary_output
-  acceptance_criteria_field: "Acceptance Criteria"
-```
-
 **Output:**  Markdown file in `output/`
 
-**Error Handling:**  Validates required fields, logs errors.
+**Error Handling:**  Validates required fields, logs errors, robust fallback for GitHub analysis.
 
-> **Jira Note:**
-> **Acceptance Criteria** – Conditions that must be met for a ticket to be considered complete.
+#### Test GitHub Connection (🐙)
+**Description:**  Tests GitHub API connectivity and lists all branches and PRs you can see for a repo, using the PyGithub library.
+- Prompts for owner/repo if not in config, or lets you select from accessible repos
+- Handles and logs 403/404 errors, and provides clear feedback on token scope/visibility issues
+
+**Parameters:**  None required (uses config or prompts interactively)
+
+**Output:**  CLI output and Markdown summary (if desired)
+
+**Error Handling:**  Handles missing token, permission errors, and provides actionable feedback.
 
 #### Gather Metrics
 **Description:**  Gather and report metrics for Jira issues, including grouping by type and summary statistics.
@@ -1060,5 +1086,23 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes and version history.
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+--- 
+
+## Reporting & Analysis Enhancements
+
+### AI/LLM-Driven Reporting
+- Executive summaries, risk flags, action items, business value, stakeholder mapping, process/workflow insights, and documentation value—all generated by LLMs.
+- AI-enhanced acceptance criteria: If missing or weak, the LLM extrapolates or improves them.
+- Parallel LLM calls for speed, with robust error handling and timeouts.
+
+### Multi-Strategy GitHub Analysis & Robust Fallbacks
+- Tries Jira dev-status API, scraping comments for PR links, and direct GitHub API calls.
+- If all fail (403/404), fetches a public test file from GitHub and runs local LLM code analysis.
+- LLM-powered code analysis: When analyzing a PR or fallback file, the LLM provides both a summary and suggested code snippets (with explanations) in the report.
+
+### Enhanced Logging & Troubleshooting
+- Every major step, error, and decision point is logged with context for easy troubleshooting and audit.
+- CLI provides clear feedback and robust error handling throughout.
 
 --- 
