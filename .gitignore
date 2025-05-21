@@ -29,3 +29,4 @@ output/ .jirassicpack_cli_state.json
 output/
 jirassicpack.log
 .jirassicpack_cli_state.json
+jirassicpack.log

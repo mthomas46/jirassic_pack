@@ -21,6 +21,7 @@ from .automated_documentation import automated_documentation
 from .deep_ticket_summary import deep_ticket_summary
 from .gather_metrics import gather_metrics
 from .summarize_tickets import summarize_tickets
+from .github_connection_test import github_connection_test
 
 # FEATURE_MANIFEST: List of all features with metadata for menu and dispatch
 FEATURE_MANIFEST = [
@@ -34,9 +35,10 @@ FEATURE_MANIFEST = [
     {"key": "automated_documentation", "label": "Automated documentation", "emoji": "📄", "group": "Integrations & Docs", "module": automated_documentation, "feature_func": automated_documentation, "description": "Generate release notes, changelogs, or sprint reviews from Jira issues."},
     {"key": "advanced_metrics", "label": "Advanced metrics and reporting", "emoji": "📊", "group": "Analytics & Reporting", "module": advanced_metrics, "feature_func": advanced_metrics, "description": "Generate advanced metrics, breakdowns, and top-N analytics for issues."},
     {"key": "sprint_board_management", "label": "Sprint and board management", "emoji": "📋", "group": "Boards & Sprints", "module": sprint_board_management, "feature_func": sprint_board_management, "description": "Summarize the state of a Jira board, sprints, and issues in the active sprint."},
-    {"key": "deep_ticket_summary", "label": "Deep Ticket Summary (full changelog, all fields)", "emoji": "🦖", "group": "Issues & Tasks", "module": deep_ticket_summary, "feature_func": deep_ticket_summary, "description": "Generate a full summary of a ticket, including changelog, comments, and all fields."},
+    {"key": "deep_ticket_summary", "label": "Deep Ticket Summary (full changelog, all fields)", "emoji": "🦖", "group": "Analytics & Reporting", "module": deep_ticket_summary, "feature_func": deep_ticket_summary, "description": "Generate a full summary of a ticket, including changelog, comments, and all fields."},
     {"key": "gather_metrics", "label": "Gather metrics for a user", "emoji": "📈", "group": "Analytics & Reporting", "module": gather_metrics, "feature_func": gather_metrics, "description": "Gather and report metrics for Jira issues, including grouping by type and summary statistics."},
     {"key": "summarize_tickets", "label": "Summarize tickets", "emoji": "🗂️", "group": "Analytics & Reporting", "module": summarize_tickets, "feature_func": summarize_tickets, "description": "Generate summary reports for Jira tickets, including grouping, top assignees, and action items."},
+    {"key": "github_connection_test", "label": "Test GitHub Connection", "emoji": "🐙", "group": "Integrations & Docs", "module": github_connection_test, "feature_func": github_connection_test, "description": "Test GitHub API connectivity and list branches for a repo."},
     # Add other features as needed
 ]
 

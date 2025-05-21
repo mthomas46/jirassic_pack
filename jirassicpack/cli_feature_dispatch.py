@@ -109,9 +109,9 @@ def run_feature(feature: str, jira, options: dict, user_email: str = None, batch
     # Only now check for FEATURE_REGISTRY
     if key not in FEATURE_REGISTRY:
         error(f"{feature_tag} Unknown feature: {feature}", extra=context)
-        contextual_log('error', f"🦖 [CLI] Unknown feature: {feature}", exc_info=True, extra=context)
+        contextual_log('error', f"\U0001f996 [CLI] Unknown feature: {feature}", exc_info=True, extra=context)
         return
-    contextual_log('info', f"🦖 [CLI] Dispatching feature: {key} | Options: {redact_sensitive(options)} {context}", extra=context)
+    contextual_log('info', f"\U0001f996 [CLI] Dispatching feature: {key} | Options: {redact_sensitive(options)} {context}", extra=context)
     prompt_func_name = f"prompt_{key}_options"
     prompt_func = None
     feature_module = FEATURE_MODULES[key]
@@ -139,14 +139,18 @@ def run_feature(feature: str, jira, options: dict, user_email: str = None, batch
             params = prompt_func(options)
         contextual_log('debug', f"[DEBUG] prompt_func returned params: {params}", extra=context)
         if not params:
-            contextual_log('info', f"🦖 [CLI] Feature '{key}' cancelled or missing parameters for user {user_email}", extra=context)
+            contextual_log('info', f"\U0001f996 [CLI] Feature '{key}' cancelled or missing parameters for user {user_email}", extra=context)
             return
     else:
         contextual_log('debug', f"[DEBUG] No prompt_func found for {key}, using options as params.", extra=context)
         params = options
     start_time = time.time()
-    contextual_log('info', f"🦖 [CLI] Feature '{key}' execution started for user {user_email}", operation="feature_start", params=redact_sensitive(options), extra=context)
-    FEATURE_REGISTRY[key](jira, params, user_email=user_email, batch_index=batch_index, unique_suffix=unique_suffix)
+    contextual_log('info', f"\U0001f996 [CLI] Feature '{key}' execution started for user {user_email}", operation="feature_start", params=redact_sensitive(options), extra=context)
+    # --- PATCH: Only pass (jira, params) to github_connection_test ---
+    if key == "github_connection_test":
+        FEATURE_REGISTRY[key](params)
+    else:
+        FEATURE_REGISTRY[key](jira, params, user_email=user_email, batch_index=batch_index, unique_suffix=unique_suffix)
     duration = int((time.time() - start_time) * 1000)
-    contextual_log('info', f"🦖 [CLI] Feature '{key}' execution finished for user {user_email} in {duration}ms", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(options), extra=context)
-    contextual_log('info', f"🦖 [CLI] Feature '{key}' complete for user {user_email}", extra=context) 
+    contextual_log('info', f"\U0001f996 [CLI] Feature '{key}' execution finished for user {user_email} in {duration}ms", operation="feature_end", status="success", duration_ms=duration, params=redact_sensitive(options), extra=context)
+    contextual_log('info', f"\U0001f996 [CLI] Feature '{key}' complete for user {user_email}", extra=context) 
