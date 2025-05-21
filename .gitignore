@@ -30,3 +30,9 @@ output/
 jirassicpack.log
 .jirassicpack_cli_state.json
 jirassicpack.log
+
+jirassicpack.servers.http_api_subprocess.log
+jirassicpack.servers.llm_api_subprocess.log
+jirassicpack/servers/llm_api_server.log
+jirassicpack_cli.log
+ollama_server.log

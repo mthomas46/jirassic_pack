@@ -49,6 +49,9 @@ from jirassicpack.cli_state import load_cli_state, save_cli_state, RECENT_FEATUR
 from jirassicpack.cli_llm_server import start_local_llm_server, stop_local_llm_server, view_local_llm_logs, live_tail_local_llm_logs, view_ollama_server_log, live_tail_ollama_server_log, search_ollama_server_log, filter_ollama_server_log, analyze_logs_and_generate_report, update_llm_menu, get_llm_status, is_process_running, live_tail_file
 from jirassicpack.cli_feature_dispatch import run_feature
 from jirassicpack.cli_logging_setup import logger
+import signal
+import yaml
+from jirassicpack.server_manager import load_ports, start_server, stop_server
 
 load_dotenv()
 
@@ -319,10 +322,44 @@ def main() -> None:
                         print("[DEBUG] Attempting to stop local LLM server...")
                         stop_local_llm_server()
                         print("[DEBUG] stop_local_llm_server() returned.")
+                        print("[DEBUG] Stopping HTTP API server...")
+                        stop_server('http_api.py')
+                        print("[DEBUG] Stopping LLM API server...")
+                        stop_server('llm_api.py')
                     except Exception as e:
-                        error(f"[EXIT] Failed to stop local LLM server: {e}")
+                        error(f"[EXIT] Failed to stop servers: {e}")
                     print("[DEBUG] Exiting CLI with sys.exit(0)")
                     sys.exit(0)
+                if action == "start_http_api":
+                    llm_port, http_port = load_ports()
+                    script_path = os.path.abspath(os.path.join(os.getcwd(), 'jirassicpack/servers/http_api.py'))
+                    start_server(script_path, http_port, '/health', 'http_api.py', module_name='jirassicpack.servers.http_api')
+                    continue
+                if action == "stop_http_api":
+                    stop_server('http_api.py')
+                    continue
+                if action == "start_api":
+                    llm_port, http_port = load_ports()
+                    script_path = os.path.abspath(os.path.join(os.getcwd(), 'jirassicpack/servers/llm_api.py'))
+                    start_server(script_path, llm_port, '/health', 'llm_api.py', module_name='jirassicpack.servers.llm_api')
+                    continue
+                if action == "stop_api":
+                    stop_server('llm_api.py')
+                    continue
+                if action == "test_http_api_status":
+                    running = is_process_running('http_api.py')
+                    if running:
+                        print(f"{JUNGLE_GREEN}HTTP API server (http_api.py) is running.{RESET}")
+                    else:
+                        print(f"{DANGER_RED}HTTP API server (http_api.py) is NOT running.{RESET}")
+                    continue
+                if action == "test_api_status":
+                    running = is_process_running('llm_api.py')
+                    if running:
+                        print(f"{JUNGLE_GREEN}LocalLLM server (llm_api.py) is running.{RESET}")
+                    else:
+                        print(f"{DANGER_RED}LocalLLM server (llm_api.py) is NOT running.{RESET}")
+                    continue
                 contextual_log('info', f"🦖 [CLI] User selected feature '{action}' for user {jira_conf.get('email')}", extra={"feature": action, "user": jira_conf.get('email'), "batch": None, "suffix": None})
                 run_feature(action, jira, options, user_email=jira_conf.get('email'))
     except Exception as e:
@@ -332,8 +369,10 @@ def main() -> None:
         rich_error(f"Fatal error: {e}")
         try:
             stop_local_llm_server()
+            stop_server('http_api.py')
+            stop_server('llm_api.py')
         except Exception as e:
-            error(f"[EXIT] Failed to stop local LLM server: {e}")
+            error(f"[EXIT] Failed to stop servers: {e}")
         print("[DEBUG] Exiting CLI after fatal error with sys.exit(1)")
         sys.exit(1)
 
